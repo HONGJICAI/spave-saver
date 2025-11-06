@@ -1,0 +1,49 @@
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# Tauri
+app/src-tauri/target/
+app/src-tauri/gen/
+
+# Node
+node_modules/
+dist/
+.pnpm-store/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Database & Cache
+*.db
+*.db-shm
+*.db-wal
+cache/
+
+# Logs
+*.log
+logs/
+
+# Build artifacts
+*.dll
+*.exe
+*.so
+*.dylib
+
+# Testing
+coverage/
+
+# Environment
+.env
+.env.local

@@ -1,0 +1,29 @@
+[package]
+name = "space-saver-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "space-saver-cli"
+path = "src/main.rs"
+
+[dependencies]
+# Local crates
+space-saver-core = { path = "../core" }
+space-saver-service = { path = "../service" }
+space-saver-db = { path = "../db" }
+space-saver-utils = { path = "../utils" }
+
+# Workspace dependencies
+tokio = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+# CLI specific
+indicatif = { workspace = true }
+comfy-table = "7.1"
+toml = "0.8"

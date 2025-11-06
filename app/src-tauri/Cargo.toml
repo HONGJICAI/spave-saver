@@ -1,0 +1,38 @@
+[package]
+name = "space-saver"
+version.workspace = true
+description = "A Tauri App - Disk Space Management Tool"
+authors.workspace = true
+edition.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "space_saver_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Workspace crates
+space-saver-core = { path = "../../crates/core" }
+space-saver-service = { path = "../../crates/service" }
+space-saver-db = { path = "../../crates/db" }
+space-saver-utils = { path = "../../crates/utils" }
+
+# Tauri dependencies
+tauri = { workspace = true }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = { workspace = true }
+
+# Workspace dependencies
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }

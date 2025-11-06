@@ -1,0 +1,25 @@
+[package]
+name = "space-saver-service"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Local crates
+space-saver-core = { path = "../core" }
+space-saver-db = { path = "../db" }
+space-saver-utils = { path = "../utils" }
+
+# Workspace dependencies
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+crossbeam = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.8"
+tokio-test = "0.4"
