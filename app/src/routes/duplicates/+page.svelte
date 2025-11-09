@@ -8,9 +8,22 @@
   let error = '';
   let duplicates: DuplicateGroup[] = [];
   let selectedForDeletion: Set<string> = new Set();
+  let sortBy = 'default' as 'default' | 'size' | 'count';
   
   $: totalWasted = duplicates.reduce((sum, group) => sum + group.wasted_space, 0);
   $: totalGroups = duplicates.length;
+  
+  $: sortedDuplicates = (() => {
+    const sorted = [...duplicates];
+    switch (sortBy) {
+      case 'size':
+        return sorted.sort((a, b) => b.wasted_space - a.wasted_space);
+      case 'count':
+        return sorted.sort((a, b) => b.count - a.count);
+      default:
+        return sorted;
+    }
+  })();
   
   async function handleScan() {
     // Use scanPaths
@@ -111,19 +124,36 @@
       />
     </div>
     
-    {#if selectedForDeletion.size > 0}
-      <div class="mb-6">
+    <div class="flex items-center justify-between mb-6">
+      {#if selectedForDeletion.size > 0}
         <button
           onclick={handleDelete}
           class="px-6 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
         >
           🗑️ Delete Selected ({selectedForDeletion.size} files)
         </button>
+      {:else}
+        <div></div>
+      {/if}
+      
+      <div class="flex items-center gap-3">
+        <label for="sort-select" class="text-sm font-medium text-gray-700">
+          Sort by:
+        </label>
+        <select
+          id="sort-select"
+          bind:value={sortBy}
+          class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        >
+          <option value="default">Default</option>
+          <option value="size">Size (Largest First)</option>
+          <option value="count">File Count (Most First)</option>
+        </select>
       </div>
-    {/if}
+    </div>
     
     <div class="space-y-4">
-      {#each duplicates as group, index}
+      {#each sortedDuplicates as group, index}
         <div class="bg-white rounded-lg shadow p-6">
           <div class="flex items-center justify-between mb-4">
             <h3 class="text-lg font-bold text-gray-900">

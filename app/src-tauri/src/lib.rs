@@ -18,7 +18,9 @@ pub fn run() {
             similar_file_check,
             delete_files,
             get_storage_stats,
-            compress_files
+            get_compression_plugins,
+            scan_compressible_files,
+            compress_files_in_place
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

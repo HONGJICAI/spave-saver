@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { scanDirectory, findDuplicates, findSimilarImages, findEmptyFiles, compressFiles, deleteFiles, getStorageStats } from './index';
+import { scanDirectory, findDuplicates, findSimilarImages, findEmptyFiles, deleteFiles, getStorageStats } from './index';
 
 // Mock Tauri API
 vi.mock('@tauri-apps/api/core', () => ({
@@ -55,15 +55,6 @@ describe('API Layer', () => {
       expect(result).toHaveProperty('totalSize');
       expect(result).toHaveProperty('fileCount');
       expect(result).toHaveProperty('typeDistribution');
-    });
-
-    it('compressFiles returns mock result in web mode', async () => {
-      const result = await compressFiles(['/file1.txt', '/file2.txt'], '/output.zip');
-      
-      expect(result).toBeDefined();
-      expect(result).toHaveProperty('originalSize');
-      expect(result).toHaveProperty('compressedSize');
-      expect(result).toHaveProperty('path');
     });
 
     it('deleteFiles resolves in web mode', async () => {
