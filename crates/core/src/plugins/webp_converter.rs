@@ -222,9 +222,7 @@ impl CompressionPlugin for WebPConverterPlugin {
         // For JPEG files, only process if they have high BPP (bits per pixel)
         // This indicates the file is not heavily compressed and can benefit from WebP conversion
         if has_extension(path, &["jpg", "jpeg"]) {
-            // Use a BPP threshold of 1.0 - JPEGs with higher BPP are good candidates
-            // Typical heavily compressed JPEGs have BPP < 1.0
-            const BPP_THRESHOLD: f64 = 1.0;
+            const BPP_THRESHOLD: f64 = 0.5;
             let has_high = Self::has_high_bpp(path, BPP_THRESHOLD);
             if !has_high {
                 debug!(

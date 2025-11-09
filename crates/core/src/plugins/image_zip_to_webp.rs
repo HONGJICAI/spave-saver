@@ -42,8 +42,6 @@ impl ImageZipToWebpZipPlugin {
             || lower.ends_with(".jpg")
             || lower.ends_with(".jpeg")
             || lower.ends_with(".bmp")
-            || lower.ends_with(".tiff")
-            || lower.ends_with(".tif")
     }
 
     fn is_webp(filename: &str) -> bool {

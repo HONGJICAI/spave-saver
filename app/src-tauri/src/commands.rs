@@ -161,8 +161,6 @@ pub async fn scan_compressible_files(
             merged_filter.extensions = Some(supported_extensions.into_iter().collect());
         }
     }
-
-    info!("Merged filter: {:?}", merged_filter);
     
     // Use the global scanner to scan all paths
     let scanner = DefaultFileScanner::new();
@@ -177,9 +175,6 @@ pub async fn scan_compressible_files(
         
         all_files.extend(files);
     }
-
-    // Log total files after filtering
-    info!("Total files after filtering: {}", all_files.len());
     
     // Step 3: Try to apply plugins on each file
     let mut compressible_files = Vec::new();
@@ -211,8 +206,6 @@ fn check_file_compressibility(
     active_plugins: &Vec<String>,
 ) -> Result<Option<serde_json::Value>, String> {
     use std::fs;
-
-    info!("Checking compressibility for file: {}", path.to_string_lossy());
     
     // Try each candidate plugin in order
     for plugin_name in active_plugins {

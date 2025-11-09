@@ -45,10 +45,8 @@ impl CompressionPlugin for AnimatedWebPConverterPlugin {
         let original_size = std::fs::metadata(source)?.len();
         info!("Original GIF size: {} bytes", original_size);
 
-        // Keep .gif extension to indicate it's animated
-        // The file will be WebP format but with .gif extension for easy identification
-        let output_path = source.with_extension("gif");
-        let temp_path = source.with_extension("gif.tmp");
+        let output_path = source.with_extension("animated.webp");
+        let temp_path = source.with_extension("animated_temp.webp");
 
         // Convert using gif2webp (best quality) or ffmpeg as fallback
         let conversion_result = self.convert_with_gif2webp(source, &temp_path)
