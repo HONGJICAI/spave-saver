@@ -1,11 +1,11 @@
-use std::path::{Path, PathBuf};
-use std::fs::{File, self};
-use std::io::{self, Write, Read};
 use anyhow::Result;
-use zip::write::FileOptions;
-use zip::{ZipWriter, CompressionMethod};
-use flate2::Compression;
 use flate2::write::GzEncoder;
+use flate2::Compression;
+use std::fs::{self, File};
+use std::io::{self};
+use std::path::Path;
+use zip::write::FileOptions;
+use zip::{CompressionMethod, ZipWriter};
 
 /// Compression trait
 pub trait CompressionAlgorithm {
@@ -73,7 +73,8 @@ impl CompressionAlgorithm for ZipCompressor {
             .compression_method(CompressionMethod::Deflated)
             .compression_level(Some(self.compression_level));
 
-        let filename = source.file_name()
+        let filename = source
+            .file_name()
             .ok_or_else(|| anyhow::anyhow!("Invalid filename"))?
             .to_string_lossy();
 
@@ -139,7 +140,9 @@ impl CompressionAlgorithm for GzipCompressor {
     }
 
     fn compress_directory(&self, _source: &Path, _dest: &Path) -> Result<u64> {
-        Err(anyhow::anyhow!("GZIP does not support directory compression directly. Use tar+gzip instead."))
+        Err(anyhow::anyhow!(
+            "GZIP does not support directory compression directly. Use tar+gzip instead."
+        ))
     }
 }
 
@@ -187,8 +190,8 @@ impl Default for Compressor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn test_zip_compress_file() {

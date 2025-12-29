@@ -1,7 +1,7 @@
-use std::path::PathBuf;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use space_saver_core::{FileInfo, FileScanner, scanner::DefaultFileScanner, FileFilter};
+use space_saver_core::{scanner::DefaultFileScanner, FileFilter, FileInfo, FileScanner};
+use std::path::PathBuf;
 
 /// Filter configuration for file operations
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -67,17 +67,21 @@ impl ServiceApi {
     }
 
     /// Scan multiple directories (primary method)
-    pub async fn scan_directories(&self, paths: Vec<PathBuf>, filter: Option<FilterConfig>) -> Result<Vec<ScanResult>> {
+    pub async fn scan_directories(
+        &self,
+        paths: Vec<PathBuf>,
+        filter: Option<FilterConfig>,
+    ) -> Result<Vec<ScanResult>> {
         let mut results = Vec::new();
-        
+
         for path in paths {
             let mut files = self.scanner.scan(&path)?;
-            
+
             // Apply filters if provided
             if let Some(ref filter_config) = filter {
                 files = filter_config.apply(files);
             }
-            
+
             let total_size: u64 = files.iter().map(|f| f.size).sum();
             let file_count = files.len();
 
@@ -88,19 +92,29 @@ impl ServiceApi {
                 files,
             });
         }
-        
+
         Ok(results)
     }
 
     /// Scan a single directory (delegates to scan_directories)
-    pub async fn scan_directory(&self, path: PathBuf, filter: Option<FilterConfig>) -> Result<ScanResult> {
+    pub async fn scan_directory(
+        &self,
+        path: PathBuf,
+        filter: Option<FilterConfig>,
+    ) -> Result<ScanResult> {
         let results = self.scan_directories(vec![path], filter).await?;
-        results.into_iter().next()
+        results
+            .into_iter()
+            .next()
             .ok_or_else(|| anyhow::anyhow!("No scan results returned"))
     }
 
     /// Find duplicate files across multiple directories (primary method)
-    pub async fn find_duplicates_in_paths(&self, paths: Vec<PathBuf>, filter: Option<FilterConfig>) -> Result<Vec<DuplicateGroup>> {
+    pub async fn find_duplicates_in_paths(
+        &self,
+        paths: Vec<PathBuf>,
+        filter: Option<FilterConfig>,
+    ) -> Result<Vec<DuplicateGroup>> {
         use space_saver_core::FileHasher;
         use std::collections::HashMap;
 
@@ -108,19 +122,22 @@ impl ServiceApi {
         let mut all_files = Vec::new();
         for path in paths {
             let mut files = self.scanner.scan(&path)?;
-            
+
             // Apply filters if provided
             if let Some(ref filter_config) = filter {
                 files = filter_config.apply(files);
             }
-            
+
             all_files.extend(files);
         }
-        
+
         // Step 1: Group files by size first
         let mut size_map: HashMap<u64, Vec<FileInfo>> = HashMap::new();
         for file in all_files {
-            size_map.entry(file.size).or_insert_with(Vec::new).push(file);
+            size_map
+                .entry(file.size)
+                .or_default()
+                .push(file);
         }
 
         // Step 2: Only calculate hashes for files with the same size (potential duplicates)
@@ -136,7 +153,7 @@ impl ServiceApi {
             // Calculate hashes only for files that might be duplicates
             for file in files {
                 if let Ok(hash) = hasher.hash_file(&file.path) {
-                    hash_map.entry(hash).or_insert_with(Vec::new).push(file);
+                    hash_map.entry(hash).or_default().push(file);
                 }
             }
         }
@@ -149,7 +166,7 @@ impl ServiceApi {
                 let total_size: u64 = files.iter().map(|f| f.size).sum();
                 let wasted_space = total_size - files[0].size;
                 let count = files.len();
-                
+
                 DuplicateGroup {
                     hash,
                     files,
@@ -164,7 +181,11 @@ impl ServiceApi {
     }
 
     /// Find duplicate files in a single directory (delegates to find_duplicates_in_paths)
-    pub async fn find_duplicates(&self, path: PathBuf, filter: Option<FilterConfig>) -> Result<Vec<DuplicateGroup>> {
+    pub async fn find_duplicates(
+        &self,
+        path: PathBuf,
+        filter: Option<FilterConfig>,
+    ) -> Result<Vec<DuplicateGroup>> {
         self.find_duplicates_in_paths(vec![path], filter).await
     }
 
@@ -175,18 +196,20 @@ impl ServiceApi {
         threshold: f32,
         filter: Option<FilterConfig>,
     ) -> Result<Vec<SimilarGroup>> {
-        use space_saver_core::{ImageSimilarity, image_sim::SimilarityAlgorithm, scanner::FileType};
+        use space_saver_core::{
+            image_sim::SimilarityAlgorithm, scanner::FileType, ImageSimilarity,
+        };
 
         // Collect image files from all paths
         let mut image_files = Vec::new();
         for path in paths {
             let mut files = self.scanner.scan(&path)?;
-            
+
             // Apply filters if provided
             if let Some(ref filter_config) = filter {
                 files = filter_config.apply(files);
             }
-            
+
             let mut images: Vec<_> = files
                 .into_iter()
                 .filter(|f| matches!(f.file_type, FileType::Image))
@@ -221,26 +244,31 @@ impl ServiceApi {
         threshold: f32,
         filter: Option<FilterConfig>,
     ) -> Result<Vec<SimilarGroup>> {
-        self.find_similar_images_in_paths(vec![path], threshold, filter).await
+        self.find_similar_images_in_paths(vec![path], threshold, filter)
+            .await
     }
 
     /// Get storage statistics across multiple directories (primary method)
-    pub async fn get_storage_stats_for_paths(&self, paths: Vec<PathBuf>, filter: Option<FilterConfig>) -> Result<StorageStats> {
+    pub async fn get_storage_stats_for_paths(
+        &self,
+        paths: Vec<PathBuf>,
+        filter: Option<FilterConfig>,
+    ) -> Result<StorageStats> {
         use space_saver_core::scanner::FileType;
 
         // Collect files from all paths
         let mut all_files = Vec::new();
         for path in paths {
             let mut files = self.scanner.scan(&path)?;
-            
+
             // Apply filters if provided
             if let Some(ref filter_config) = filter {
                 files = filter_config.apply(files);
             }
-            
+
             all_files.extend(files);
         }
-        
+
         let mut stats = StorageStats {
             total_files: all_files.len(),
             total_size: 0,
@@ -254,7 +282,7 @@ impl ServiceApi {
 
         for file in all_files {
             stats.total_size += file.size;
-            
+
             if file.size == 0 {
                 stats.empty_files += 1;
             }
@@ -272,7 +300,11 @@ impl ServiceApi {
     }
 
     /// Get storage statistics for a single directory (delegates to get_storage_stats_for_paths)
-    pub async fn get_storage_stats(&self, path: PathBuf, filter: Option<FilterConfig>) -> Result<StorageStats> {
+    pub async fn get_storage_stats(
+        &self,
+        path: PathBuf,
+        filter: Option<FilterConfig>,
+    ) -> Result<StorageStats> {
         self.get_storage_stats_for_paths(vec![path], filter).await
     }
 }
@@ -344,10 +376,10 @@ mod tests {
         let content = b"Hello, World!";
         let mut file1 = fs::File::create(dir_path.join("file1.txt")).unwrap();
         file1.write_all(content).unwrap();
-        
+
         let mut file2 = fs::File::create(dir_path.join("file2.txt")).unwrap();
         file2.write_all(content).unwrap();
-        
+
         // Create a unique file
         let mut file3 = fs::File::create(dir_path.join("file3.txt")).unwrap();
         file3.write_all(b"Different content").unwrap();
@@ -356,16 +388,19 @@ mod tests {
         let large_content = vec![b'A'; 2_000_000]; // 2MB
         let mut file4 = fs::File::create(dir_path.join("large1.bin")).unwrap();
         file4.write_all(&large_content).unwrap();
-        
+
         let mut file5 = fs::File::create(dir_path.join("large2.bin")).unwrap();
         file5.write_all(&large_content).unwrap();
 
         let api = ServiceApi::new();
-        let duplicates = api.find_duplicates_in_paths(vec![dir_path.to_path_buf()], None).await.unwrap();
+        let duplicates = api
+            .find_duplicates_in_paths(vec![dir_path.to_path_buf()], None)
+            .await
+            .unwrap();
 
         // Should find 2 duplicate groups (txt files and large files)
         assert_eq!(duplicates.len(), 2, "Should find 2 duplicate groups");
-        
+
         // Check that each group has 2 files
         for group in &duplicates {
             assert_eq!(group.count, 2, "Each group should have 2 files");
@@ -383,7 +418,7 @@ mod tests {
         let mut file1 = fs::File::create(dir_path.join("small1.txt")).unwrap();
         file1.write_all(small_content).unwrap();
         drop(file1); // Ensure file is flushed
-        
+
         let mut file2 = fs::File::create(dir_path.join("small2.txt")).unwrap();
         file2.write_all(small_content).unwrap();
         drop(file2);
@@ -393,13 +428,13 @@ mod tests {
         let mut file3 = fs::File::create(dir_path.join("large1.bin")).unwrap();
         file3.write_all(&large_content).unwrap();
         drop(file3);
-        
+
         let mut file4 = fs::File::create(dir_path.join("large2.bin")).unwrap();
         file4.write_all(&large_content).unwrap();
         drop(file4);
 
         let api = ServiceApi::new();
-        
+
         // Filter: only files >= 100KB
         let filter = FilterConfig {
             min_size: Some(100_000),
@@ -407,13 +442,20 @@ mod tests {
             extensions: None,
             file_pattern: None,
         };
-        
-        let duplicates = api.find_duplicates_in_paths(vec![dir_path.to_path_buf()], Some(filter)).await.unwrap();
+
+        let duplicates = api
+            .find_duplicates_in_paths(vec![dir_path.to_path_buf()], Some(filter))
+            .await
+            .unwrap();
 
         // Should only find the large duplicates, not the small ones
-        assert_eq!(duplicates.len(), 1, "Should find only 1 duplicate group (large files)");
+        assert_eq!(
+            duplicates.len(),
+            1,
+            "Should find only 1 duplicate group (large files)"
+        );
         assert_eq!(duplicates[0].count, 2);
-        
+
         // Verify the files are the large ones
         for file in &duplicates[0].files {
             assert!(file.size >= 100_000, "All files should be >= 100KB");
@@ -430,7 +472,7 @@ mod tests {
         let mut file1 = fs::File::create(dir_path.join("small1.txt")).unwrap();
         file1.write_all(small_content).unwrap();
         drop(file1);
-        
+
         let mut file2 = fs::File::create(dir_path.join("small2.txt")).unwrap();
         file2.write_all(small_content).unwrap();
         drop(file2);
@@ -440,13 +482,13 @@ mod tests {
         let mut file3 = fs::File::create(dir_path.join("large1.bin")).unwrap();
         file3.write_all(&large_content).unwrap();
         drop(file3);
-        
+
         let mut file4 = fs::File::create(dir_path.join("large2.bin")).unwrap();
         file4.write_all(&large_content).unwrap();
         drop(file4);
 
         let api = ServiceApi::new();
-        
+
         // Filter: only files <= 1KB
         let filter = FilterConfig {
             min_size: None,
@@ -454,13 +496,20 @@ mod tests {
             extensions: None,
             file_pattern: None,
         };
-        
-        let duplicates = api.find_duplicates_in_paths(vec![dir_path.to_path_buf()], Some(filter)).await.unwrap();
+
+        let duplicates = api
+            .find_duplicates_in_paths(vec![dir_path.to_path_buf()], Some(filter))
+            .await
+            .unwrap();
 
         // Should only find the small duplicates
-        assert_eq!(duplicates.len(), 1, "Should find only 1 duplicate group (small files)");
+        assert_eq!(
+            duplicates.len(),
+            1,
+            "Should find only 1 duplicate group (small files)"
+        );
         assert_eq!(duplicates[0].count, 2);
-        
+
         // Verify the files are the small ones
         for file in &duplicates[0].files {
             assert!(file.size <= 1_000, "All files should be <= 1KB");
@@ -476,7 +525,7 @@ mod tests {
         let txt_content = b"Text content";
         let mut file1 = fs::File::create(dir_path.join("doc1.txt")).unwrap();
         file1.write_all(txt_content).unwrap();
-        
+
         let mut file2 = fs::File::create(dir_path.join("doc2.txt")).unwrap();
         file2.write_all(txt_content).unwrap();
 
@@ -484,12 +533,12 @@ mod tests {
         let bin_content = b"Binary content";
         let mut file3 = fs::File::create(dir_path.join("data1.bin")).unwrap();
         file3.write_all(bin_content).unwrap();
-        
+
         let mut file4 = fs::File::create(dir_path.join("data2.bin")).unwrap();
         file4.write_all(bin_content).unwrap();
 
         let api = ServiceApi::new();
-        
+
         // Filter: only .txt files
         let filter = FilterConfig {
             min_size: None,
@@ -497,16 +546,26 @@ mod tests {
             extensions: Some(vec!["txt".to_string()]),
             file_pattern: None,
         };
-        
-        let duplicates = api.find_duplicates_in_paths(vec![dir_path.to_path_buf()], Some(filter)).await.unwrap();
+
+        let duplicates = api
+            .find_duplicates_in_paths(vec![dir_path.to_path_buf()], Some(filter))
+            .await
+            .unwrap();
 
         // Should only find txt duplicates
-        assert_eq!(duplicates.len(), 1, "Should find only 1 duplicate group (.txt files)");
+        assert_eq!(
+            duplicates.len(),
+            1,
+            "Should find only 1 duplicate group (.txt files)"
+        );
         assert_eq!(duplicates[0].count, 2);
-        
+
         // Verify all files have .txt extension
         for file in &duplicates[0].files {
-            assert!(file.path.extension().unwrap() == "txt", "All files should be .txt");
+            assert!(
+                file.path.extension().unwrap() == "txt",
+                "All files should be .txt"
+            );
         }
     }
 
@@ -519,7 +578,7 @@ mod tests {
         let content1 = b"Report content";
         let mut file1 = fs::File::create(dir_path.join("report_2024.txt")).unwrap();
         file1.write_all(content1).unwrap();
-        
+
         let mut file2 = fs::File::create(dir_path.join("report_2025.txt")).unwrap();
         file2.write_all(content1).unwrap();
 
@@ -527,12 +586,12 @@ mod tests {
         let content2 = b"Data content";
         let mut file3 = fs::File::create(dir_path.join("data_old.txt")).unwrap();
         file3.write_all(content2).unwrap();
-        
+
         let mut file4 = fs::File::create(dir_path.join("data_new.txt")).unwrap();
         file4.write_all(content2).unwrap();
 
         let api = ServiceApi::new();
-        
+
         // Filter: only files with "report" in name
         let filter = FilterConfig {
             min_size: None,
@@ -540,17 +599,27 @@ mod tests {
             extensions: None,
             file_pattern: Some("report".to_string()),
         };
-        
-        let duplicates = api.find_duplicates_in_paths(vec![dir_path.to_path_buf()], Some(filter)).await.unwrap();
+
+        let duplicates = api
+            .find_duplicates_in_paths(vec![dir_path.to_path_buf()], Some(filter))
+            .await
+            .unwrap();
 
         // Should only find report duplicates
-        assert_eq!(duplicates.len(), 1, "Should find only 1 duplicate group (report files)");
+        assert_eq!(
+            duplicates.len(),
+            1,
+            "Should find only 1 duplicate group (report files)"
+        );
         assert_eq!(duplicates[0].count, 2);
-        
+
         // Verify all files contain "report" in filename
         for file in &duplicates[0].files {
             let filename = file.path.file_name().unwrap().to_str().unwrap();
-            assert!(filename.contains("report"), "All files should contain 'report' in name");
+            assert!(
+                filename.contains("report"),
+                "All files should contain 'report' in name"
+            );
         }
     }
 
@@ -569,7 +638,7 @@ mod tests {
         let mut file2 = fs::File::create(dir_path.join("large1.txt")).unwrap();
         file2.write_all(&large_txt_content).unwrap();
         drop(file2);
-        
+
         let mut file3 = fs::File::create(dir_path.join("large2.txt")).unwrap();
         file3.write_all(&large_txt_content).unwrap();
         drop(file3);
@@ -578,13 +647,13 @@ mod tests {
         let mut file4 = fs::File::create(dir_path.join("large1.bin")).unwrap();
         file4.write_all(&large_txt_content).unwrap();
         drop(file4);
-        
+
         let mut file5 = fs::File::create(dir_path.join("large2.bin")).unwrap();
         file5.write_all(&large_txt_content).unwrap();
         drop(file5);
 
         let api = ServiceApi::new();
-        
+
         // Filter: .txt files AND size >= 100KB
         let filter = FilterConfig {
             min_size: Some(100_000),
@@ -592,17 +661,27 @@ mod tests {
             extensions: Some(vec!["txt".to_string()]),
             file_pattern: None,
         };
-        
-        let duplicates = api.find_duplicates_in_paths(vec![dir_path.to_path_buf()], Some(filter)).await.unwrap();
+
+        let duplicates = api
+            .find_duplicates_in_paths(vec![dir_path.to_path_buf()], Some(filter))
+            .await
+            .unwrap();
 
         // Should only find large .txt duplicates
-        assert_eq!(duplicates.len(), 1, "Should find only 1 duplicate group (large .txt files)");
+        assert_eq!(
+            duplicates.len(),
+            1,
+            "Should find only 1 duplicate group (large .txt files)"
+        );
         assert_eq!(duplicates[0].count, 2);
-        
+
         // Verify files match both criteria
         for file in &duplicates[0].files {
             assert!(file.size >= 100_000, "Files should be >= 100KB");
-            assert!(file.path.extension().unwrap() == "txt", "Files should be .txt");
+            assert!(
+                file.path.extension().unwrap() == "txt",
+                "Files should be .txt"
+            );
         }
     }
 
@@ -617,18 +696,22 @@ mod tests {
         let content = b"Shared content";
         let mut file1 = fs::File::create(dir1_path.join("file1.txt")).unwrap();
         file1.write_all(content).unwrap();
-        
+
         let mut file2 = fs::File::create(dir2_path.join("file2.txt")).unwrap();
         file2.write_all(content).unwrap();
 
         let api = ServiceApi::new();
-        let duplicates = api.find_duplicates_in_paths(
-            vec![dir1_path.to_path_buf(), dir2_path.to_path_buf()],
-            None
-        ).await.unwrap();
+        let duplicates = api
+            .find_duplicates_in_paths(vec![dir1_path.to_path_buf(), dir2_path.to_path_buf()], None)
+            .await
+            .unwrap();
 
         // Should find duplicates across both directories
-        assert_eq!(duplicates.len(), 1, "Should find 1 duplicate group across directories");
+        assert_eq!(
+            duplicates.len(),
+            1,
+            "Should find 1 duplicate group across directories"
+        );
         assert_eq!(duplicates[0].count, 2);
     }
 }

@@ -22,7 +22,7 @@ describe('API Layer', () => {
     });
 
     it('findDuplicates returns mock data in web mode', async () => {
-      const result = await findDuplicates('/test/path');
+      const result = await findDuplicates(['/test/path']);
       
       expect(result).toBeInstanceOf(Array);
       if (result.length > 0) {
@@ -33,7 +33,7 @@ describe('API Layer', () => {
     });
 
     it('findSimilarImages returns mock data in web mode', async () => {
-      const result = await findSimilarImages('/test/path', 0.9);
+      const result = await findSimilarImages(['/test/path'], 0.9);
       
       expect(result).toBeInstanceOf(Array);
       if (result.length > 0) {
@@ -43,13 +43,13 @@ describe('API Layer', () => {
     });
 
     it('findEmptyFiles returns mock data in web mode', async () => {
-      const result = await findEmptyFiles('/test/path');
+      const result = await findEmptyFiles(['/test/path']);
       
       expect(result).toBeInstanceOf(Array);
     });
 
     it('getStorageStats returns mock data in web mode', async () => {
-      const result = await getStorageStats('/test/path');
+      const result = await getStorageStats(['/test/path']);
       
       expect(result).toBeDefined();
       expect(result).toHaveProperty('totalSize');

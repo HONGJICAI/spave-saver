@@ -1,9 +1,9 @@
-use std::path::Path;
-use std::fs::File;
-use std::io::{BufReader, Read};
 use anyhow::Result;
 use blake3::Hasher as Blake3Hasher;
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
+use std::fs::File;
+use std::io::{BufReader, Read};
+use std::path::Path;
 
 /// Hash algorithm trait
 pub trait HashAlgorithm {
@@ -137,10 +137,10 @@ mod tests {
     fn test_consistent_hashing() {
         let data = b"consistent data";
         let hasher = Blake3Hash;
-        
+
         let hash1 = hasher.hash_bytes(data);
         let hash2 = hasher.hash_bytes(data);
-        
+
         assert_eq!(hash1, hash2);
     }
 }

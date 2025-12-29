@@ -1,4 +1,4 @@
-use tracing_subscriber::{fmt, EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Initialize the logger with default settings
 pub fn init_logger() {
@@ -24,8 +24,7 @@ pub fn init_logger_with_file(file_path: &str) -> anyhow::Result<()> {
         .append(true)
         .open(file_path)?;
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     tracing_subscriber::registry()
         .with(filter)
@@ -37,8 +36,6 @@ pub fn init_logger_with_file(file_path: &str) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_logger_initialization() {
         // Note: Can only initialize logger once per test run

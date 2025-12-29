@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use image::{DynamicImage, GenericImageView};
 use std::fs;
 use std::path::Path;
-use tracing::{error, warn, info, debug};
+use tracing::{debug, error, info, warn};
 
 use crate::compress_plugins::{
     generate_output_filename, get_file_size, has_extension, CompressionPlugin, CompressionResult,
@@ -16,9 +16,7 @@ pub struct WebPConverterPlugin {
 
 impl WebPConverterPlugin {
     pub fn new() -> Self {
-        Self {
-            quality: 85.0,
-        }
+        Self { quality: 85.0 }
     }
 
     pub fn with_quality(mut self, quality: f32) -> Self {
@@ -118,8 +116,9 @@ impl WebPConverterPlugin {
                     error = %e,
                     "Failed to open image for WebP conversion"
                 );
-                return Err(anyhow::anyhow!("Failed to open image: {}", source.display())
-                    .context(e));
+                return Err(
+                    anyhow::anyhow!("Failed to open image: {}", source.display()).context(e),
+                );
             }
         };
 
@@ -157,10 +156,10 @@ impl WebPConverterPlugin {
                     error = %e,
                     "Failed to encode image to WebP format"
                 );
-                Err(anyhow::anyhow!(
-                    "Failed to encode image to WebP: {}",
-                    source.display()
-                ).context(e))
+                Err(
+                    anyhow::anyhow!("Failed to encode image to WebP: {}", source.display())
+                        .context(e),
+                )
             }
         }
     }
@@ -210,11 +209,11 @@ impl CompressionPlugin for WebPConverterPlugin {
         if !path.is_file() {
             return Ok((false, Some("Not a file".to_string())));
         }
-        
+
         if !Self::is_supported_image(path) {
             return Ok((false, Some("File extension not supported".to_string())));
         }
-        
+
         if Self::is_webp(path) {
             return Ok((false, Some("Already a WebP file".to_string())));
         }
@@ -230,9 +229,15 @@ impl CompressionPlugin for WebPConverterPlugin {
                     threshold = BPP_THRESHOLD,
                     "Skipping JPEG file: BPP too low (already well compressed)"
                 );
-                return Ok((false, Some(format!("JPEG BPP below threshold ({})", BPP_THRESHOLD))));
+                return Ok((
+                    false,
+                    Some(format!("JPEG BPP below threshold ({})", BPP_THRESHOLD)),
+                ));
             }
-            return Ok((true, Some(format!("JPEG with high BPP (above {})", BPP_THRESHOLD))));
+            return Ok((
+                true,
+                Some(format!("JPEG with high BPP (above {})", BPP_THRESHOLD)),
+            ));
         }
 
         // Process all other supported image formats
@@ -274,14 +279,14 @@ impl CompressionPlugin for WebPConverterPlugin {
                     "Failed to remove larger WebP file"
                 );
             }
-            
+
             info!(
                 source = %source.display(),
                 original_size = original_size,
                 webp_size = compressed_size,
                 "WebP conversion did not reduce file size, keeping original"
             );
-            
+
             return Err(anyhow::anyhow!(
                 "WebP conversion resulted in larger file ({} bytes vs {} bytes), keeping original",
                 compressed_size,
@@ -298,10 +303,7 @@ impl CompressionPlugin for WebPConverterPlugin {
             );
             // Clean up the WebP file since we couldn't remove the original
             let _ = fs::remove_file(&output_path);
-            return Err(anyhow::anyhow!(
-                "Failed to remove original file: {}",
-                e
-            ).context(e));
+            return Err(anyhow::anyhow!("Failed to remove original file: {}", e).context(e));
         }
 
         info!(

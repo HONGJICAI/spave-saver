@@ -1,7 +1,7 @@
-pub mod sqlite;
 pub mod cache;
 pub mod models;
+pub mod sqlite;
 
-pub use sqlite::SqliteDatabase;
 pub use cache::Cache;
-pub use models::{ScanRecord, DuplicateRecord, FileRecord};
+pub use models::{DuplicateRecord, FileRecord, ScanRecord};
+pub use sqlite::SqliteDatabase;

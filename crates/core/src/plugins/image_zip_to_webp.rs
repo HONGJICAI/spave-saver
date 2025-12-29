@@ -1,13 +1,12 @@
 use anyhow::{anyhow, Context, Result};
-use image::{DynamicImage, ImageFormat};
-use tokio::fs::rename;
+use image::DynamicImage;
 use std::fs::{self, File};
-use std::io::{BufWriter, Cursor, Read, Write};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use zip::{write::FileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::compress_plugins::{
-    generate_output_filename, get_file_size, has_extension, CompressionPlugin, CompressionResult,
+    get_file_size, has_extension, CompressionPlugin, CompressionResult,
     PluginMetadata,
 };
 
@@ -190,16 +189,22 @@ impl CompressionPlugin for ImageZipToWebpZipPlugin {
         if !path.is_file() {
             return Ok((false, Some("Not a file".to_string())));
         }
-        
+
         if !has_extension(path, &["zip"]) {
             return Ok((false, Some("Not a ZIP file".to_string())));
         }
 
         let has_images = self.has_convertible_images(path)?;
         if has_images {
-            Ok((true, Some("ZIP file contains convertible images".to_string())))
+            Ok((
+                true,
+                Some("ZIP file contains convertible images".to_string()),
+            ))
         } else {
-            Ok((false, Some("ZIP file contains no convertible images".to_string())))
+            Ok((
+                false,
+                Some("ZIP file contains no convertible images".to_string()),
+            ))
         }
     }
 
@@ -248,14 +253,14 @@ impl CompressionPlugin for ImageZipToWebpZipPlugin {
         // Ensure output directory exists
         fs::create_dir_all(output_dir)?;
 
-        if (output_path.exists()) {
+        if output_path.exists() {
             return Err(anyhow!(
                 "Output file {} already exists",
                 output_path.display()
             ));
         }
 
-        if (backup_path.exists()) {
+        if backup_path.exists() {
             return Err(anyhow!(
                 "Backup file {} already exists",
                 backup_path.display()
@@ -268,13 +273,15 @@ impl CompressionPlugin for ImageZipToWebpZipPlugin {
             .with_context(|| format!("Failed to process ZIP file: {}", source.display()))?;
 
         let compressed_size = get_file_size(&output_path)?;
-        
+
         // Rename the origin file as backup and move the new ZIP to original location
         fs::rename(source, backup_path)?;
-        fs::rename(&output_path, source).with_context(|| format!(
-            "Failed to move converted ZIP to original location: {}",
-            source.display()
-        ))?;
+        fs::rename(&output_path, source).with_context(|| {
+            format!(
+                "Failed to move converted ZIP to original location: {}",
+                source.display()
+            )
+        })?;
 
         Ok(CompressionResult {
             original_size,

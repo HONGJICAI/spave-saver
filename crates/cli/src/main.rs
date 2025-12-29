@@ -1,12 +1,12 @@
-use clap::{Parser, Subcommand};
-use std::path::PathBuf;
 use anyhow::Result;
+use clap::{Parser, Subcommand};
+use comfy_table::{presets::UTF8_FULL, Table};
 use indicatif::{ProgressBar, ProgressStyle};
-use comfy_table::{Table, presets::UTF8_FULL};
+use std::path::PathBuf;
 
-use space_saver_core::{FileScanner, scanner::DefaultFileScanner, FileHasher, FileFilter};
-use space_saver_service::{ServiceApi, FileOperations};
-use space_saver_utils::{init_logger, format_size, format_duration, Config};
+use space_saver_core::{scanner::DefaultFileScanner, FileFilter, FileScanner};
+use space_saver_service::{FileOperations, ServiceApi};
+use space_saver_utils::{format_duration, format_size, init_logger, Config};
 
 /// Space Saver - Disk space management utility
 #[derive(Parser)]
@@ -109,12 +109,12 @@ async fn main() -> Result<()> {
 
 async fn scan_command(path: PathBuf, detailed: bool) -> Result<()> {
     println!("Scanning: {}", path.display());
-    
+
     let pb = ProgressBar::new_spinner();
     pb.set_style(
         ProgressStyle::default_spinner()
             .template("{spinner:.green} {msg}")
-            .unwrap()
+            .unwrap(),
     );
     pb.set_message("Scanning files...");
 
@@ -156,12 +156,12 @@ async fn scan_command(path: PathBuf, detailed: bool) -> Result<()> {
 
 async fn duplicates_command(path: PathBuf, min_size: u64) -> Result<()> {
     println!("Finding duplicates in: {}", path.display());
-    
+
     let pb = ProgressBar::new_spinner();
     pb.set_style(
         ProgressStyle::default_spinner()
             .template("{spinner:.green} {msg}")
-            .unwrap()
+            .unwrap(),
     );
     pb.set_message("Scanning and hashing files...");
 
@@ -191,7 +191,7 @@ async fn duplicates_command(path: PathBuf, min_size: u64) -> Result<()> {
         println!("    Files: {}", group.count);
         println!("    Size each: {}", format_size(group.files[0].size));
         println!("    Wasted: {}", format_size(group.wasted_space));
-        
+
         for file in &group.files {
             println!("      - {}", file.path.display());
         }
@@ -203,7 +203,7 @@ async fn duplicates_command(path: PathBuf, min_size: u64) -> Result<()> {
 async fn similar_command(path: PathBuf, threshold: f32) -> Result<()> {
     println!("Finding similar images in: {}", path.display());
     println!("Threshold: {:.2}", threshold);
-    
+
     let pb = ProgressBar::new_spinner();
     pb.set_message("Analyzing images...");
 
@@ -221,7 +221,11 @@ async fn similar_command(path: PathBuf, threshold: f32) -> Result<()> {
     println!("  Groups found: {}", similar.len());
 
     for (idx, group) in similar.iter().take(10).enumerate() {
-        println!("\n  Group {} (Similarity: {:.2}%)", idx + 1, group.similarity_score * 100.0);
+        println!(
+            "\n  Group {} (Similarity: {:.2}%)",
+            idx + 1,
+            group.similarity_score * 100.0
+        );
         for file in &group.files {
             println!("    - {}", file.path.display());
         }
@@ -232,7 +236,7 @@ async fn similar_command(path: PathBuf, threshold: f32) -> Result<()> {
 
 async fn empty_command(path: PathBuf, delete: bool) -> Result<()> {
     println!("Finding empty files in: {}", path.display());
-    
+
     let scanner = DefaultFileScanner::new();
     let files = scanner.scan(&path)?;
     let filter = FileFilter::empty_files();
@@ -266,7 +270,7 @@ async fn empty_command(path: PathBuf, delete: bool) -> Result<()> {
 
 async fn stats_command(path: PathBuf) -> Result<()> {
     println!("Analyzing: {}", path.display());
-    
+
     let pb = ProgressBar::new_spinner();
     pb.set_message("Analyzing storage...");
 
@@ -291,7 +295,7 @@ async fn stats_command(path: PathBuf) -> Result<()> {
 
 async fn config_command() -> Result<()> {
     let config = Config::load_or_default();
-    
+
     println!("📝 Configuration:");
     println!("{}", toml::to_string_pretty(&config)?);
     println!("\nConfig file: {}", Config::default_path().display());

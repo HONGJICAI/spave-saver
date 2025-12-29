@@ -1,29 +1,29 @@
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use std::fs;
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Database path
     pub database_path: PathBuf,
-    
+
     /// Cache directory
     pub cache_dir: PathBuf,
-    
+
     /// Log level
     pub log_level: String,
-    
+
     /// Maximum concurrent tasks
     pub max_concurrent_tasks: usize,
-    
+
     /// Default hash algorithm
     pub hash_algorithm: HashAlgorithm,
-    
+
     /// Image similarity threshold
     pub image_similarity_threshold: f32,
-    
+
     /// Scan settings
     pub scan: ScanConfig,
 }
@@ -32,13 +32,13 @@ pub struct Config {
 pub struct ScanConfig {
     /// Follow symbolic links
     pub follow_links: bool,
-    
+
     /// Maximum scan depth
     pub max_depth: Option<usize>,
-    
+
     /// Minimum file size to include (bytes)
     pub min_file_size: u64,
-    
+
     /// File patterns to exclude
     pub exclude_patterns: Vec<String>,
 }
@@ -51,7 +51,7 @@ pub enum HashAlgorithm {
 
 impl Default for Config {
     fn default() -> Self {
-        let config_dir = directories::ProjectDirs::from("com", "spacesaver", "Space-Saver")
+        let _config_dir = directories::ProjectDirs::from("com", "spacesaver", "Space-Saver")
             .map(|dirs| dirs.config_dir().to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
 
@@ -98,12 +98,12 @@ impl Config {
     /// Save configuration to a file
     pub fn save(&self, path: &Path) -> Result<()> {
         let content = toml::to_string_pretty(self)?;
-        
+
         // Create parent directory if it doesn't exist
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        
+
         fs::write(path, content)?;
         Ok(())
     }
@@ -118,7 +118,7 @@ impl Config {
     /// Load or create default configuration
     pub fn load_or_default() -> Self {
         let path = Self::default_path();
-        
+
         if path.exists() {
             Self::load(&path).unwrap_or_default()
         } else {
@@ -154,10 +154,10 @@ mod tests {
     fn test_save_and_load() {
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
-        
+
         let config = Config::default();
         config.save(&config_path).unwrap();
-        
+
         let loaded = Config::load(&config_path).unwrap();
         assert_eq!(loaded.log_level, config.log_level);
     }
@@ -166,6 +166,6 @@ mod tests {
     fn test_scan_config_default() {
         let scan = ScanConfig::default();
         assert!(!scan.follow_links);
-        assert!(scan.exclude_patterns.len() > 0);
+        assert!(!scan.exclude_patterns.is_empty());
     }
 }

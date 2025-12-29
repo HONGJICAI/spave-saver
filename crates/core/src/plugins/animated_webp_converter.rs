@@ -12,7 +12,8 @@ impl CompressionPlugin for AnimatedWebPConverterPlugin {
     fn metadata(&self) -> crate::compress_plugins::PluginMetadata {
         crate::compress_plugins::PluginMetadata {
             name: "Animated WebP Converter".to_string(),
-            description: "Convert GIF to Animated WebP with lossy compression for better file size".to_string(),
+            description: "Convert GIF to Animated WebP with lossy compression for better file size"
+                .to_string(),
             version: "1.0.0".to_string(),
         }
     }
@@ -21,9 +22,15 @@ impl CompressionPlugin for AnimatedWebPConverterPlugin {
         if let Some(ext) = path.extension() {
             let ext_lower = ext.to_string_lossy().to_lowercase();
             if ext_lower == "gif" {
-                Ok((true, Some("GIF file for animated WebP conversion".to_string())))
+                Ok((
+                    true,
+                    Some("GIF file for animated WebP conversion".to_string()),
+                ))
             } else {
-                Ok((false, Some(format!("Not a GIF file (extension: {})", ext_lower))))
+                Ok((
+                    false,
+                    Some(format!("Not a GIF file (extension: {})", ext_lower)),
+                ))
             }
         } else {
             Ok((false, Some("No file extension".to_string())))
@@ -36,7 +43,10 @@ impl CompressionPlugin for AnimatedWebPConverterPlugin {
     }
 
     fn process(&self, source: &Path, _output_dir: &Path) -> anyhow::Result<CompressionResult> {
-        info!("Starting Animated WebP conversion for: {}", source.display());
+        info!(
+            "Starting Animated WebP conversion for: {}",
+            source.display()
+        );
 
         // Check if file exists
         if !source.exists() {
@@ -52,7 +62,8 @@ impl CompressionPlugin for AnimatedWebPConverterPlugin {
         let temp_path = source.with_extension("animated_temp.webp");
 
         // Convert using gif2webp (best quality) or ffmpeg as fallback
-        let conversion_result = self.convert_with_gif2webp(source, &temp_path)
+        let conversion_result = self
+            .convert_with_gif2webp(source, &temp_path)
             .or_else(|_| self.convert_with_ffmpeg(source, &temp_path));
 
         match conversion_result {
@@ -70,9 +81,7 @@ impl CompressionPlugin for AnimatedWebPConverterPlugin {
                         compressed_size, original_size
                     );
                     std::fs::remove_file(&temp_path)?;
-                    return Err(anyhow::anyhow!(
-                        "WebP conversion did not reduce file size"
-                    ));
+                    return Err(anyhow::anyhow!("WebP conversion did not reduce file size"));
                 }
 
                 // WebP is smaller, remove original GIF and rename temp to final
@@ -112,7 +121,7 @@ impl AnimatedWebPConverterPlugin {
         info!("Attempting GIF to Animated WebP conversion using gif2webp");
 
         let mut cmd = Command::new("gif2webp");
-        cmd.args(&[
+        cmd.args([
             "-q",
             "85", // Quality 85
             "-m",
@@ -144,7 +153,7 @@ impl AnimatedWebPConverterPlugin {
         info!("Attempting GIF to Animated WebP conversion using FFmpeg");
 
         let mut cmd = Command::new("ffmpeg");
-        cmd.args(&[
+        cmd.args([
             "-i",
             input.to_str().unwrap(),
             "-c:v",
@@ -154,7 +163,7 @@ impl AnimatedWebPConverterPlugin {
             "-quality",
             "75", // Quality setting
             "-loop",
-            "0", // Loop forever like GIF
+            "0",  // Loop forever like GIF
             "-y", // Overwrite output file
             output.to_str().unwrap(),
         ]);
@@ -185,15 +194,18 @@ mod tests {
         let plugin = AnimatedWebPConverterPlugin;
         let (can_handle, reason) = plugin.can_handle(Path::new("test.gif")).unwrap();
         assert!(can_handle);
-        assert_eq!(reason, Some("GIF file for animated WebP conversion".to_string()));
-        
+        assert_eq!(
+            reason,
+            Some("GIF file for animated WebP conversion".to_string())
+        );
+
         let (can_handle, _) = plugin.can_handle(Path::new("TEST.GIF")).unwrap();
         assert!(can_handle);
-        
+
         let (can_handle, reason) = plugin.can_handle(Path::new("test.png")).unwrap();
         assert!(!can_handle);
         assert!(reason.is_some());
-        
+
         let (can_handle, reason) = plugin.can_handle(Path::new("test.jpg")).unwrap();
         assert!(!can_handle);
         assert!(reason.is_some());

@@ -1,6 +1,6 @@
-use std::path::Path;
 use anyhow::Result;
-use image::{DynamicImage, imageops::FilterType};
+use image::{imageops::FilterType, DynamicImage};
+use std::path::Path;
 
 /// Image similarity algorithm trait
 pub trait SimilarityAlgorithm {
@@ -25,11 +25,7 @@ impl ImageSimilarity {
     /// Compute perceptual hash for an image
     fn compute_phash(&self, path: &Path) -> Result<Vec<u8>> {
         let img = image::open(path)?;
-        let img = img.resize_exact(
-            self.hash_size,
-            self.hash_size,
-            FilterType::Lanczos3,
-        );
+        let img = img.resize_exact(self.hash_size, self.hash_size, FilterType::Lanczos3);
         let img = img.to_luma8();
 
         // Calculate average pixel value
@@ -38,14 +34,18 @@ impl ImageSimilarity {
         let avg = sum / (self.hash_size * self.hash_size);
 
         // Create hash based on whether each pixel is above or below average
-        let hash: Vec<u8> = pixels.iter().map(|&p| if p as u32 >= avg { 1 } else { 0 }).collect();
-        
+        let hash: Vec<u8> = pixels
+            .iter()
+            .map(|&p| if p as u32 >= avg { 1 } else { 0 })
+            .collect();
+
         Ok(hash)
     }
 
     /// Calculate hamming distance between two hashes
     fn hamming_distance(&self, hash1: &[u8], hash2: &[u8]) -> u32 {
-        hash1.iter()
+        hash1
+            .iter()
             .zip(hash2.iter())
             .filter(|(a, b)| a != b)
             .count() as u32
@@ -69,8 +69,8 @@ impl SimilarityAlgorithm for ImageSimilarity {
         let hash_b = self.compute_phash(b)?;
 
         let distance = self.hamming_distance(&hash_a, &hash_b);
-        let hash_length = (self.hash_size * self.hash_size) as u32;
-        
+        let hash_length = self.hash_size * self.hash_size;
+
         Ok(self.distance_to_similarity(distance, hash_length))
     }
 }
@@ -146,7 +146,7 @@ mod tests {
         let similarity = ImageSimilarity::new();
         let hash1 = vec![1, 0, 1, 0];
         let hash2 = vec![1, 1, 1, 0];
-        
+
         let distance = similarity.hamming_distance(&hash1, &hash2);
         assert_eq!(distance, 1);
     }
@@ -154,11 +154,11 @@ mod tests {
     #[test]
     fn test_distance_to_similarity() {
         let similarity = ImageSimilarity::new();
-        
+
         // Identical hashes (distance 0)
         let sim = similarity.distance_to_similarity(0, 64);
         assert_eq!(sim, 1.0);
-        
+
         // Half different (distance 32)
         let sim = similarity.distance_to_similarity(32, 64);
         assert_eq!(sim, 0.5);
