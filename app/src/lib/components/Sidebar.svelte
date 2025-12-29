@@ -1,4 +1,5 @@
 <script lang="ts">
+  // @ts-ignore
   import { page } from '$app/state';
   
   interface NavItem {

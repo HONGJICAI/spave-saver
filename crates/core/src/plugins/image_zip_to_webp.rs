@@ -6,8 +6,7 @@ use std::path::{Path, PathBuf};
 use zip::{write::FileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::compress_plugins::{
-    get_file_size, has_extension, CompressionPlugin, CompressionResult,
-    PluginMetadata,
+    get_file_size, has_extension, CompressionPlugin, CompressionResult, PluginMetadata,
 };
 
 /// Plugin for converting ZIP files containing images to WebP format

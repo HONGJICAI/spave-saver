@@ -134,10 +134,7 @@ impl ServiceApi {
         // Step 1: Group files by size first
         let mut size_map: HashMap<u64, Vec<FileInfo>> = HashMap::new();
         for file in all_files {
-            size_map
-                .entry(file.size)
-                .or_default()
-                .push(file);
+            size_map.entry(file.size).or_default().push(file);
         }
 
         // Step 2: Only calculate hashes for files with the same size (potential duplicates)

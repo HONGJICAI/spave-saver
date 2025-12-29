@@ -144,10 +144,7 @@ impl Task for FindDuplicatesTask {
 
         for (idx, file) in files.iter().enumerate() {
             if let Ok(hash) = hasher.hash_file(&file.path) {
-                hash_map
-                    .entry(hash)
-                    .or_default()
-                    .push(file.path.clone());
+                hash_map.entry(hash).or_default().push(file.path.clone());
             }
 
             if idx % 100 == 0 {
