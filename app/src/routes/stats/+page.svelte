@@ -1,12 +1,21 @@
 <script lang="ts">
-  import { getStorageStats, type StorageStats } from '$lib/api';
+  import { getStorageStats, scanDirectories, type StorageStats, type ScanResult } from '$lib/api';
   import StatCard from '$lib/components/StatCard.svelte';
+  import FileList from '$lib/components/FileList.svelte';
   import { formatSize, percentage } from '$lib/utils/format';
   import { appState } from '$lib/stores/app';
   
   let loading = false;
   let error = '';
   let stats: StorageStats | null = null;
+  let scanResults: ScanResult[] = [];
+  let showFileList = false;
+  
+  // Aggregate scan results for file list
+  $: filesResult = scanResults.length > 0 ? {
+    file_count: scanResults.reduce((sum, r) => sum + r.file_count, 0),
+    files: scanResults.flatMap(r => r.files)
+  } : null;
   
   async function handleScan() {
     // Use scanPaths
@@ -20,9 +29,16 @@
     loading = true;
     error = '';
     stats = null;
+    scanResults = [];
     
     try {
-      stats = await getStorageStats(paths, $appState.filterConfig);
+      // Fetch both stats and file list in parallel
+      const [statsResult, filesData] = await Promise.all([
+        getStorageStats(paths, $appState.filterConfig),
+        scanDirectories(paths, $appState.filterConfig)
+      ]);
+      stats = statsResult;
+      scanResults = filesData;
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to get statistics';
     } finally {
@@ -162,5 +178,27 @@
         </div>
       </div>
     </div>
+    
+    <!-- File List Section -->
+    {#if filesResult && filesResult.files.length > 0}
+      <div class="bg-white rounded-lg shadow p-6 mt-6">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-xl font-bold text-gray-900">
+            📁 All Files ({filesResult.files.length.toLocaleString()})
+          </h2>
+          <button
+            onclick={() => showFileList = !showFileList}
+            class="px-4 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
+          >
+            {showFileList ? '🔼 Hide Files' : '🔽 Show Files'}
+          </button>
+        </div>
+        {#if showFileList}
+          <FileList files={filesResult.files} />
+        {:else}
+          <p class="text-gray-500 text-sm">Click "Show Files" to view the complete file list.</p>
+        {/if}
+      </div>
+    {/if}
   {/if}
 </div>

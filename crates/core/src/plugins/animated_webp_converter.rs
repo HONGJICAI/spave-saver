@@ -3,6 +3,9 @@ use std::path::Path;
 use std::process::Command;
 use tracing::{error, info, warn};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 pub struct AnimatedWebPConverterPlugin;
 
 impl CompressionPlugin for AnimatedWebPConverterPlugin {
@@ -108,18 +111,23 @@ impl AnimatedWebPConverterPlugin {
     fn convert_with_gif2webp(&self, input: &Path, output: &Path) -> anyhow::Result<()> {
         info!("Attempting GIF to Animated WebP conversion using gif2webp");
 
-        let status = Command::new("gif2webp")
-            .args(&[
-                "-q",
-                "85", // Quality 85
-                "-m",
-                "6", // Compression method 6 (best compression)
-                "-lossy",
-                input.to_str().unwrap(),
-                "-o",
-                output.to_str().unwrap(),
-            ])
-            .output()?;
+        let mut cmd = Command::new("gif2webp");
+        cmd.args(&[
+            "-q",
+            "85", // Quality 85
+            "-m",
+            "6", // Compression method 6 (best compression)
+            "-lossy",
+            input.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+        ]);
+
+        // On Windows, prevent opening a new terminal window
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+        let status = cmd.output()?;
 
         if status.status.success() {
             info!("gif2webp conversion successful");
@@ -135,22 +143,27 @@ impl AnimatedWebPConverterPlugin {
     fn convert_with_ffmpeg(&self, input: &Path, output: &Path) -> anyhow::Result<()> {
         info!("Attempting GIF to Animated WebP conversion using FFmpeg");
 
-        let status = Command::new("ffmpeg")
-            .args(&[
-                "-i",
-                input.to_str().unwrap(),
-                "-c:v",
-                "libwebp",
-                "-lossless",
-                "0", // Use lossy compression
-                "-quality",
-                "75", // Quality setting
-                "-loop",
-                "0", // Loop forever like GIF
-                "-y", // Overwrite output file
-                output.to_str().unwrap(),
-            ])
-            .output()?;
+        let mut cmd = Command::new("ffmpeg");
+        cmd.args(&[
+            "-i",
+            input.to_str().unwrap(),
+            "-c:v",
+            "libwebp",
+            "-lossless",
+            "0", // Use lossy compression
+            "-quality",
+            "75", // Quality setting
+            "-loop",
+            "0", // Loop forever like GIF
+            "-y", // Overwrite output file
+            output.to_str().unwrap(),
+        ]);
+
+        // On Windows, prevent opening a new terminal window
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+        let status = cmd.output()?;
 
         if status.status.success() {
             info!("FFmpeg conversion successful");

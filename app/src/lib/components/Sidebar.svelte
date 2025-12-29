@@ -8,11 +8,11 @@
   }
   
   const navItems: NavItem[] = [
-    { name: 'Scan', path: '/', icon: '🔍' },
+    { name: 'Home', path: '/', icon: '🏠' },
+    { name: 'Statistics', path: '/stats', icon: '📊' },
     { name: 'Duplicates', path: '/duplicates', icon: '📋' },
     { name: 'Similar', path: '/similar', icon: '🖼️' },
     { name: 'Empty', path: '/empty', icon: '📄' },
-    { name: 'Statistics', path: '/stats', icon: '📊' },
     { name: 'Compress', path: '/compress', icon: '🗜️' }
   ];
 </script>

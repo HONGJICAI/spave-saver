@@ -28,6 +28,16 @@
   let totalActualSavings = $derived(
     successResults.reduce((sum, r) => sum + (r.savings || 0), 0)
   );
+
+  let showAllSuccess = $state(false);
+  let showAllErrors = $state(false);
+  
+  let displayedSuccessResults = $derived(
+    showAllSuccess ? successResults : successResults.slice(0, 10)
+  );
+  let displayedErrorResults = $derived(
+    showAllErrors ? errorResults : errorResults.slice(0, 10)
+  );
 </script>
 
 <div class="bg-white rounded-lg shadow p-6">
@@ -67,19 +77,29 @@
         <p>• {errorResults.length} failed</p>
       </div>
 
-      <!-- Currently Processing Files -->
-      {#if currentlyProcessing.length > 0}
-        <div class="mt-4 pt-4 border-t border-blue-200">
-          <div class="flex items-center gap-2 mb-2">
+      <!-- Currently Processing Files (always visible with fixed height) -->
+      <div class="mt-4 pt-4 border-t border-blue-200">
+        <div class="flex items-center gap-2 mb-2">
+          {#if currentlyProcessing.length > 0}
             <svg class="animate-spin h-4 w-4 text-blue-600" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
-            <span class="text-sm font-semibold text-gray-800">
-              Currently Processing ({currentlyProcessing.length}):
-            </span>
-          </div>
-          <div class="space-y-1 max-h-32 overflow-y-auto">
+          {:else}
+            <svg class="h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" opacity="0.25"></circle>
+            </svg>
+          {/if}
+          <span class="text-sm font-semibold text-gray-800">
+            Currently Processing ({currentlyProcessing.length}):
+          </span>
+        </div>
+        <div class="space-y-1 h-32 overflow-y-auto bg-white/30 rounded px-2 py-2">
+          {#if currentlyProcessing.length === 0}
+            <div class="flex items-center justify-center h-full text-xs text-gray-500 italic">
+              Waiting for next file...
+            </div>
+          {:else}
             {#each currentlyProcessing as filePath}
               <div class="flex items-center gap-2 text-xs text-gray-700 bg-white/50 rounded px-2 py-1">
                 <svg class="w-3 h-3 text-blue-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -88,9 +108,9 @@
                 <span class="truncate" title={filePath}>{filePath}</span>
               </div>
             {/each}
-          </div>
+          {/if}
         </div>
-      {/if}
+      </div>
     </div>
   {/if}
 
@@ -138,7 +158,7 @@
               </tr>
             </thead>
             <tbody class="divide-y">
-              {#each successResults as result}
+              {#each displayedSuccessResults as result}
                 <tr class="hover:bg-green-50">
                   <td class="px-3 py-2">
                     <p class="font-medium text-gray-900 truncate" title={result.path}>
@@ -159,6 +179,16 @@
               {/each}
             </tbody>
           </table>
+          {#if successResults.length > 10}
+            <div class="p-2 bg-gray-50 border-t border-gray-200 text-center">
+              <button 
+                onclick={() => showAllSuccess = !showAllSuccess}
+                class="text-xs text-blue-600 hover:text-blue-800 font-medium"
+              >
+                {showAllSuccess ? `Show Less (10 of ${successResults.length})` : `Show All (${successResults.length})`}
+              </button>
+            </div>
+          {/if}
         {/if}
       </div>
     </div>
@@ -187,7 +217,7 @@
               </tr>
             </thead>
             <tbody class="divide-y">
-              {#each errorResults as result}
+              {#each displayedErrorResults as result}
                 <tr class="hover:bg-red-50">
                   <td class="px-3 py-2">
                     <p class="font-medium text-gray-900 truncate" title={result.path}>
@@ -204,6 +234,16 @@
               {/each}
             </tbody>
           </table>
+          {#if errorResults.length > 10}
+            <div class="p-2 bg-gray-50 border-t border-gray-200 text-center">
+              <button 
+                onclick={() => showAllErrors = !showAllErrors}
+                class="text-xs text-blue-600 hover:text-blue-800 font-medium"
+              >
+                {showAllErrors ? `Show Less (10 of ${errorResults.length})` : `Show All (${errorResults.length})`}
+              </button>
+            </div>
+          {/if}
         {/if}
       </div>
     </div>
