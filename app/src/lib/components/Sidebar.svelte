@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   // @ts-ignore
   import { page } from '$app/state';
   
@@ -16,6 +17,17 @@
     { name: 'Empty', path: '/empty', icon: '📄' },
     { name: 'Compress', path: '/compress', icon: '🗜️' }
   ];
+
+  let mode = 'Loading...';
+
+  onMount(() => {
+    // @ts-ignore
+    if (window.__TAURI_INTERNALS__) {
+      mode = 'Desktop Mode';
+    } else {
+      mode = 'Web Mode';
+    }
+  });
 </script>
 
 <aside class="w-64 bg-gray-800 text-white flex flex-col">
@@ -45,7 +57,7 @@
   </nav>
   
   <div class="p-4 border-t border-gray-700 text-sm text-gray-400">
-    <p>Mode: <span class="text-green-400" id="app-mode">Loading...</span></p>
+    <p>Mode: <span class="text-green-400" id="app-mode">{mode}</span></p>
     <p class="mt-1">Version 0.1.0</p>
   </div>
 </aside>

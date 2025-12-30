@@ -1,6 +1,16 @@
 import { render, screen } from '@testing-library/svelte';
 import Sidebar from './Sidebar.svelte';
 
+// Mock $app/state
+vi.mock('$app/state', () => ({
+  page: {
+    subscribe: (fn: (value: any) => void) => {
+      fn({ url: { pathname: '/' } });
+      return () => {};
+    }
+  }
+}));
+
 describe('Sidebar', () => {
   beforeEach(() => {
     // Mock window.__TAURI_INTERNALS__ for testing
@@ -10,7 +20,7 @@ describe('Sidebar', () => {
   it('renders all navigation items', () => {
     render(Sidebar);
     
-    expect(screen.getByText('Scan')).toBeInTheDocument();
+    expect(screen.getByText('Home')).toBeInTheDocument();
     expect(screen.getByText('Duplicates')).toBeInTheDocument();
     expect(screen.getByText('Similar')).toBeInTheDocument();
     expect(screen.getByText('Empty')).toBeInTheDocument();

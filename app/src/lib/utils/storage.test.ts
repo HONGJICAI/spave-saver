@@ -29,7 +29,7 @@ describe('storage utilities', () => {
 
     it('should handle errors gracefully', () => {
       const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      const mockStorage = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      const mockStorage = vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => {
         throw new Error('Storage error');
       });
 
@@ -73,7 +73,7 @@ describe('storage utilities', () => {
 
     it('should handle errors gracefully', () => {
       const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      const mockStorage = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      const mockStorage = vi.spyOn(window.localStorage, 'getItem').mockImplementation(() => {
         throw new Error('Storage error');
       });
 
@@ -99,7 +99,7 @@ describe('storage utilities', () => {
 
     it('should handle errors gracefully', () => {
       const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      const mockStorage = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      const mockStorage = vi.spyOn(window.localStorage, 'removeItem').mockImplementation(() => {
         throw new Error('Storage error');
       });
 

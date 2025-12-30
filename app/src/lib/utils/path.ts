@@ -8,8 +8,10 @@
 export function normalizePath(path: string): string {
   // Convert backslashes to forward slashes
   let normalized = path.replace(/\\/g, '/');
-  // Remove trailing slash unless it's the root
-  if (normalized.length > 1 && normalized.endsWith('/')) {
+  // Remove trailing slash ONLY if it's not a root path
+  if (normalized !== '' && normalized !== '/' &&
+      normalized.match(/^[a-zA-Z]:\/$/) === null &&  // not like C:/
+      normalized.endsWith('/')) {
     normalized = normalized.slice(0, -1);
   }
   // Convert to lowercase for case-insensitive comparison (Windows)

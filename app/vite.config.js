@@ -11,9 +11,7 @@ const mode = process.env.VITE_MODE || 'tauri';
 export default defineConfig(async () => ({
   plugins: [
     sveltekit(),
-    new Promise((resolve) => {
-      resolve(tailwindcss());
-    }),
+    tailwindcss(),
   ],
 
   // Define global constants based on mode

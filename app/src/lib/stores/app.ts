@@ -42,8 +42,10 @@ function createAppStore() {
       return newState;
     }),
     addScanPath: (path: string) => update(state => {
-      if (state.scanPaths.includes(path)) {
-        return state;
+      for (const pathItem of state.scanPaths) {
+        if (pathItem === path) {
+          return state; // Duplicate
+        }
       }
       const newPaths = [...state.scanPaths, path];
       saveToStorage(storageKeys.SCAN_PATHS, newPaths);
