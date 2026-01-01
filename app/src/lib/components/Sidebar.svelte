@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   // @ts-ignore
-  import { page } from '$app/state';
+  import { page } from '$app/stores';
   
   interface NavItem {
     name: string;
