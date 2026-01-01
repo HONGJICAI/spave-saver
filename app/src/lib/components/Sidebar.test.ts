@@ -1,8 +1,8 @@
 import { render, screen } from '@testing-library/svelte';
 import Sidebar from './Sidebar.svelte';
 
-// Mock $app/state
-vi.mock('$app/state', () => ({
+// Mock $app/stores
+vi.mock('$app/stores', () => ({
   page: {
     subscribe: (fn: (value: any) => void) => {
       fn({ url: { pathname: '/' } });
