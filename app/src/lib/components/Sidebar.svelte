@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   // @ts-ignore
+  import { base } from '$app/paths';
+  // @ts-ignore
   import { page } from '$app/stores';
   
   interface NavItem {
@@ -28,6 +30,15 @@
       mode = 'Web Mode';
     }
   });
+
+  // Helper to check if a path is active, handling base path
+  function isActive(currentPath: string, itemPath: string): boolean {
+    // Normalize paths by removing trailing slashes for comparison
+    const normalize = (p: string) => p.endsWith('/') && p.length > 1 ? p.slice(0, -1) : p;
+    
+    const targetPath = `${base}${itemPath}`;
+    return normalize(currentPath) === normalize(targetPath);
+  }
 </script>
 
 <aside class="w-64 bg-gray-800 text-white flex flex-col">
@@ -41,9 +52,9 @@
       {#each navItems as item}
         <li>
           <a
-            href={item.path}
+            href="{base}{item.path}"
             class="flex items-center gap-3 px-4 py-3 rounded-lg transition-colors {
-              $page.url.pathname === item.path
+              isActive($page.url.pathname, item.path)
                 ? 'bg-blue-600 text-white'
                 : 'hover:bg-gray-700'
             }"

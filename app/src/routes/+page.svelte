@@ -1,5 +1,7 @@
 <script lang="ts">
   import { appState } from '$lib/stores/app';
+  // @ts-ignore
+  import { base } from '$app/paths';
   
   interface QuickAction {
     name: string;
@@ -84,7 +86,7 @@
       </div>
       {#if hasPathsConfigured}
         <a
-          href="/stats"
+          href="{base}/stats"
           class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
         >
           📊 Analyze Now
@@ -98,7 +100,7 @@
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
     {#each quickActions as action}
       <a
-        href={action.path}
+        href="{base}{action.path}"
         class="group bg-white rounded-xl shadow-md hover:shadow-lg transition-all p-6 border-2 border-transparent hover:border-gray-200"
       >
         <div class="flex items-start gap-4">
