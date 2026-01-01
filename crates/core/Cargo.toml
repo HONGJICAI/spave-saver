@@ -15,11 +15,15 @@ walkdir = { workspace = true }
 blake3 = { workspace = true }
 sha2 = { workspace = true }
 image = { workspace = true }
+imagesize = "0.13"
+webp = { workspace = true }
 rayon = { workspace = true }
 crossbeam = { workspace = true }
 zip = { workspace = true }
 flate2 = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true }
+once_cell = { workspace = true }
 
 [dev-dependencies]
 tokio-test = "0.4"

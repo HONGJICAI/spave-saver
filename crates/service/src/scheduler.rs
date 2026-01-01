@@ -1,9 +1,9 @@
-use tokio::sync::{mpsc, RwLock};
-use std::sync::Arc;
-use anyhow::Result;
-use crate::task::{Task, TaskStatus};
 use crate::progress::ProgressUpdate;
-use tracing::{info, error};
+use crate::task::Task;
+use anyhow::Result;
+use std::sync::Arc;
+use tokio::sync::{mpsc, RwLock};
+use tracing::{error, info};
 
 /// Task scheduler for managing concurrent tasks
 pub struct Scheduler {
@@ -15,7 +15,7 @@ pub struct Scheduler {
 impl Scheduler {
     pub fn new(max_concurrent: usize) -> (Self, mpsc::Receiver<ProgressUpdate>) {
         let (progress_tx, progress_rx) = mpsc::channel(100);
-        
+
         let scheduler = Self {
             task_queue: Arc::new(RwLock::new(Vec::new())),
             max_concurrent,
@@ -35,7 +35,10 @@ impl Scheduler {
 
     /// Start the scheduler
     pub async fn start(&self) -> Result<()> {
-        info!("Scheduler started with max_concurrent={}", self.max_concurrent);
+        info!(
+            "Scheduler started with max_concurrent={}",
+            self.max_concurrent
+        );
 
         loop {
             let task = {
@@ -46,10 +49,10 @@ impl Scheduler {
             match task {
                 Some(mut task) => {
                     let progress_tx = self.progress_tx.clone();
-                    
+
                     tokio::spawn(async move {
                         info!("Executing task: {:?}", task.task_type());
-                        
+
                         match task.run(progress_tx).await {
                             Ok(_) => {
                                 info!("Task completed successfully");
@@ -92,7 +95,7 @@ mod tests {
     async fn test_scheduler_submit() {
         let (scheduler, _rx) = Scheduler::new(4);
         let task = Box::new(ScanTask::new(PathBuf::from("/test")));
-        
+
         scheduler.submit(task).await.unwrap();
         assert_eq!(scheduler.queue_length().await, 1);
     }
@@ -101,10 +104,10 @@ mod tests {
     async fn test_scheduler_clear() {
         let (scheduler, _rx) = Scheduler::new(4);
         let task = Box::new(ScanTask::new(PathBuf::from("/test")));
-        
+
         scheduler.submit(task).await.unwrap();
         assert_eq!(scheduler.queue_length().await, 1);
-        
+
         scheduler.clear_queue().await;
         assert_eq!(scheduler.queue_length().await, 0);
     }

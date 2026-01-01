@@ -1,10 +1,10 @@
-use chrono::{DateTime, Utc, Local};
+use chrono::{DateTime, Local, Utc};
 use std::time::Duration;
 
 /// Format a duration in human-readable format
 pub fn format_duration(duration: Duration) -> String {
     let secs = duration.as_secs();
-    
+
     if secs < 60 {
         format!("{}s", secs)
     } else if secs < 3600 {
@@ -18,28 +18,30 @@ pub fn format_duration(duration: Duration) -> String {
 
 /// Format a timestamp as a human-readable date/time string
 pub fn format_timestamp(timestamp: i64) -> String {
-    let datetime = DateTime::<Utc>::from_timestamp(timestamp, 0)
-        .unwrap_or_else(|| Utc::now());
-    
-    datetime.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S").to_string()
+    let datetime = DateTime::<Utc>::from_timestamp(timestamp, 0).unwrap_or_else(Utc::now);
+
+    datetime
+        .with_timezone(&Local)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
 }
 
 /// Format a file size in human-readable format
 pub fn format_size(size: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-    
+
     if size == 0 {
         return "0 B".to_string();
     }
-    
+
     let mut size = size as f64;
     let mut unit_index = 0;
-    
+
     while size >= 1024.0 && unit_index < UNITS.len() - 1 {
         size /= 1024.0;
         unit_index += 1;
     }
-    
+
     if unit_index == 0 {
         format!("{} {}", size as u64, UNITS[unit_index])
     } else {
@@ -54,7 +56,7 @@ pub fn now() -> i64 {
 
 /// Calculate time difference between two timestamps
 pub fn time_diff(start: i64, end: i64) -> Duration {
-    Duration::from_secs((end - start).abs() as u64)
+    Duration::from_secs((end - start).unsigned_abs())
 }
 
 /// Format a speed (bytes per second)

@@ -197,7 +197,7 @@ mod tests {
         let cache = FileHashCache::temporary().unwrap();
 
         cache.set_hash("/test/file.txt", 12345, "abc123").unwrap();
-        
+
         let hash = cache.get_hash("/test/file.txt", 12345).unwrap();
         assert_eq!(hash, Some("abc123".to_string()));
 

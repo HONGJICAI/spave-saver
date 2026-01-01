@@ -1,9 +1,9 @@
+use crate::progress::ProgressUpdate;
+use anyhow::Result;
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use async_trait::async_trait;
-use anyhow::Result;
 use tokio::sync::mpsc;
-use crate::progress::ProgressUpdate;
 
 /// Task type enumeration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,34 +52,40 @@ impl ScanTask {
 #[async_trait]
 impl Task for ScanTask {
     async fn run(&mut self, progress_tx: mpsc::Sender<ProgressUpdate>) -> Result<()> {
-        use space_saver_core::{FileScanner, scanner::DefaultFileScanner};
-        
+        use space_saver_core::{scanner::DefaultFileScanner, FileScanner};
+
         self.status = TaskStatus::Running;
-        
+
         let path = match &self.task_type {
             TaskType::Scan(p) => p.clone(),
             _ => unreachable!(),
         };
 
-        let _ = progress_tx.send(ProgressUpdate::Started {
-            task_type: format!("{:?}", self.task_type),
-            total_items: 0,
-        }).await;
+        let _ = progress_tx
+            .send(ProgressUpdate::Started {
+                task_type: format!("{:?}", self.task_type),
+                total_items: 0,
+            })
+            .await;
 
         let scanner = DefaultFileScanner::new();
         let files = scanner.scan(&path)?;
 
-        let _ = progress_tx.send(ProgressUpdate::Progress {
-            current: files.len(),
-            total: files.len(),
-            message: format!("Scanned {} files", files.len()),
-        }).await;
+        let _ = progress_tx
+            .send(ProgressUpdate::Progress {
+                current: files.len(),
+                total: files.len(),
+                message: format!("Scanned {} files", files.len()),
+            })
+            .await;
 
         self.status = TaskStatus::Completed;
 
-        let _ = progress_tx.send(ProgressUpdate::Completed {
-            message: format!("Scan completed. Found {} files", files.len()),
-        }).await;
+        let _ = progress_tx
+            .send(ProgressUpdate::Completed {
+                message: format!("Scan completed. Found {} files", files.len()),
+            })
+            .await;
 
         Ok(())
     }
@@ -111,7 +117,7 @@ impl FindDuplicatesTask {
 #[async_trait]
 impl Task for FindDuplicatesTask {
     async fn run(&mut self, progress_tx: mpsc::Sender<ProgressUpdate>) -> Result<()> {
-        use space_saver_core::{FileScanner, FileHasher, scanner::DefaultFileScanner};
+        use space_saver_core::{scanner::DefaultFileScanner, FileHasher, FileScanner};
         use std::collections::HashMap;
 
         self.status = TaskStatus::Running;
@@ -121,10 +127,12 @@ impl Task for FindDuplicatesTask {
             _ => unreachable!(),
         };
 
-        let _ = progress_tx.send(ProgressUpdate::Started {
-            task_type: "FindDuplicates".to_string(),
-            total_items: 0,
-        }).await;
+        let _ = progress_tx
+            .send(ProgressUpdate::Started {
+                task_type: "FindDuplicates".to_string(),
+                total_items: 0,
+            })
+            .await;
 
         // Scan files
         let scanner = DefaultFileScanner::new();
@@ -136,28 +144,33 @@ impl Task for FindDuplicatesTask {
 
         for (idx, file) in files.iter().enumerate() {
             if let Ok(hash) = hasher.hash_file(&file.path) {
-                hash_map.entry(hash).or_insert_with(Vec::new).push(file.path.clone());
+                hash_map.entry(hash).or_default().push(file.path.clone());
             }
 
             if idx % 100 == 0 {
-                let _ = progress_tx.send(ProgressUpdate::Progress {
-                    current: idx,
-                    total: files.len(),
-                    message: format!("Hashing files... {}/{}", idx, files.len()),
-                }).await;
+                let _ = progress_tx
+                    .send(ProgressUpdate::Progress {
+                        current: idx,
+                        total: files.len(),
+                        message: format!("Hashing files... {}/{}", idx, files.len()),
+                    })
+                    .await;
             }
         }
 
         // Count duplicates
-        let duplicates: Vec<_> = hash_map.into_iter()
+        let duplicates: Vec<_> = hash_map
+            .into_iter()
             .filter(|(_, paths)| paths.len() > 1)
             .collect();
 
         self.status = TaskStatus::Completed;
 
-        let _ = progress_tx.send(ProgressUpdate::Completed {
-            message: format!("Found {} groups of duplicate files", duplicates.len()),
-        }).await;
+        let _ = progress_tx
+            .send(ProgressUpdate::Completed {
+                message: format!("Found {} groups of duplicate files", duplicates.len()),
+            })
+            .await;
 
         Ok(())
     }
@@ -189,7 +202,7 @@ impl CleanEmptyTask {
 #[async_trait]
 impl Task for CleanEmptyTask {
     async fn run(&mut self, progress_tx: mpsc::Sender<ProgressUpdate>) -> Result<()> {
-        use space_saver_core::{FileScanner, FileFilter, scanner::DefaultFileScanner};
+        use space_saver_core::{scanner::DefaultFileScanner, FileFilter, FileScanner};
 
         self.status = TaskStatus::Running;
 
@@ -198,10 +211,12 @@ impl Task for CleanEmptyTask {
             _ => unreachable!(),
         };
 
-        let _ = progress_tx.send(ProgressUpdate::Started {
-            task_type: "CleanEmpty".to_string(),
-            total_items: 0,
-        }).await;
+        let _ = progress_tx
+            .send(ProgressUpdate::Started {
+                task_type: "CleanEmpty".to_string(),
+                total_items: 0,
+            })
+            .await;
 
         // Scan and filter empty files
         let scanner = DefaultFileScanner::new();
@@ -209,9 +224,11 @@ impl Task for CleanEmptyTask {
         let filter = FileFilter::empty_files();
         let empty_files = filter.filter_files(files);
 
-        let _ = progress_tx.send(ProgressUpdate::Completed {
-            message: format!("Found {} empty files", empty_files.len()),
-        }).await;
+        let _ = progress_tx
+            .send(ProgressUpdate::Completed {
+                message: format!("Found {} empty files", empty_files.len()),
+            })
+            .await;
 
         self.status = TaskStatus::Completed;
         Ok(())
@@ -240,19 +257,18 @@ mod tests {
     async fn test_scan_task() {
         use tempfile::tempdir;
         let dir = tempdir().unwrap();
-        
+
         let (tx, mut rx) = mpsc::channel(10);
         let mut task = ScanTask::new(dir.path().to_path_buf());
-        
+
         tokio::spawn(async move {
             let _ = task.run(tx).await;
         });
 
         // Collect progress updates
         while let Some(update) = rx.recv().await {
-            match update {
-                ProgressUpdate::Completed { .. } => break,
-                _ => {}
+            if let ProgressUpdate::Completed { .. } = update {
+                break;
             }
         }
     }

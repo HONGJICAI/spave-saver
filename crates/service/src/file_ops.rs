@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
-use std::fs;
 use anyhow::Result;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// File operations (delete, move, copy, etc.)
 pub struct FileOperations;
@@ -20,7 +20,7 @@ impl FileOperations {
     pub fn delete_files(&self, paths: &[PathBuf]) -> Result<usize> {
         let mut count = 0;
         for path in paths {
-            if let Ok(_) = self.delete_file(path) {
+            if self.delete_file(path).is_ok() {
                 count += 1;
             }
         }
@@ -57,6 +57,7 @@ impl FileOperations {
     }
 
     /// Get directory size (recursive)
+    #[allow(clippy::only_used_in_recursion)]
     pub fn dir_size(&self, path: &Path) -> Result<u64> {
         let mut total_size = 0u64;
 
@@ -64,7 +65,7 @@ impl FileOperations {
             for entry in fs::read_dir(path)? {
                 let entry = entry?;
                 let path = entry.path();
-                
+
                 if path.is_file() {
                     total_size += entry.metadata()?.len();
                 } else if path.is_dir() {
@@ -77,6 +78,7 @@ impl FileOperations {
     }
 
     /// Count files in directory (recursive)
+    #[allow(clippy::only_used_in_recursion)]
     pub fn count_files(&self, path: &Path) -> Result<usize> {
         let mut count = 0;
 
@@ -84,7 +86,7 @@ impl FileOperations {
             for entry in fs::read_dir(path)? {
                 let entry = entry?;
                 let path = entry.path();
-                
+
                 if path.is_file() {
                     count += 1;
                 } else if path.is_dir() {
@@ -112,23 +114,23 @@ mod tests {
     fn test_file_operations() {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
-        
+
         fs::write(&file_path, "test content").unwrap();
 
         let ops = FileOperations::new();
-        
+
         // Test file exists
         assert!(ops.exists(&file_path));
-        
+
         // Test file size
         let size = ops.file_size(&file_path).unwrap();
         assert_eq!(size, 12);
-        
+
         // Test copy
         let copy_path = dir.path().join("copy.txt");
         ops.copy_file(&file_path, &copy_path).unwrap();
         assert!(ops.exists(&copy_path));
-        
+
         // Test delete
         ops.delete_file(&copy_path).unwrap();
         assert!(!ops.exists(&copy_path));
@@ -137,16 +139,16 @@ mod tests {
     #[test]
     fn test_dir_operations() {
         let dir = tempdir().unwrap();
-        
+
         fs::write(dir.path().join("file1.txt"), "content1").unwrap();
         fs::write(dir.path().join("file2.txt"), "content2").unwrap();
 
         let ops = FileOperations::new();
-        
+
         // Test count files
         let count = ops.count_files(dir.path()).unwrap();
         assert_eq!(count, 2);
-        
+
         // Test directory size
         let size = ops.dir_size(dir.path()).unwrap();
         assert!(size > 0);

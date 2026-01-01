@@ -1,7 +1,7 @@
-use rusqlite::{Connection, params, Result as SqliteResult};
+use crate::models::{DuplicateRecord, FileRecord, ScanRecord};
 use anyhow::Result;
+use rusqlite::{params, Connection};
 use std::path::Path;
-use crate::models::{FileRecord, ScanRecord, DuplicateRecord};
 
 /// SQLite database for persistent storage
 pub struct SqliteDatabase {
@@ -104,7 +104,7 @@ impl SqliteDatabase {
     pub fn get_file_by_path(&self, path: &str) -> Result<Option<FileRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, path, size, hash, file_type, modified, created_at 
-             FROM files WHERE path = ?1"
+             FROM files WHERE path = ?1",
         )?;
 
         let file = stmt.query_row(params![path], |row| {
@@ -130,7 +130,7 @@ impl SqliteDatabase {
     pub fn get_files_by_hash(&self, hash: &str) -> Result<Vec<FileRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, path, size, hash, file_type, modified, created_at 
-             FROM files WHERE hash = ?1"
+             FROM files WHERE hash = ?1",
         )?;
 
         let files = stmt.query_map(params![hash], |row| {
@@ -174,7 +174,7 @@ impl SqliteDatabase {
     pub fn get_recent_scans(&self, limit: usize) -> Result<Vec<ScanRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, path, file_count, total_size, scan_time, created_at 
-             FROM scans ORDER BY created_at DESC LIMIT ?1"
+             FROM scans ORDER BY created_at DESC LIMIT ?1",
         )?;
 
         let scans = stmt.query_map(params![limit], |row| {
@@ -220,13 +220,13 @@ impl SqliteDatabase {
     pub fn get_duplicates(&self) -> Result<Vec<DuplicateRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, hash, file_paths, file_count, total_size, wasted_space, created_at 
-             FROM duplicates ORDER BY wasted_space DESC"
+             FROM duplicates ORDER BY wasted_space DESC",
         )?;
 
         let dups = stmt.query_map([], |row| {
             let file_paths_json: String = row.get(2)?;
-            let file_paths: Vec<String> = serde_json::from_str(&file_paths_json)
-                .unwrap_or_default();
+            let file_paths: Vec<String> =
+                serde_json::from_str(&file_paths_json).unwrap_or_default();
 
             Ok(DuplicateRecord {
                 id: row.get(0)?,
@@ -249,7 +249,8 @@ impl SqliteDatabase {
 
     /// Delete a file record
     pub fn delete_file(&self, id: i64) -> Result<()> {
-        self.conn.execute("DELETE FROM files WHERE id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM files WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -268,7 +269,7 @@ mod tests {
 
     #[test]
     fn test_database_creation() {
-        let db = SqliteDatabase::in_memory().unwrap();
+        let _db = SqliteDatabase::in_memory().unwrap();
         // Just ensure it can be created
     }
 
@@ -295,12 +296,7 @@ mod tests {
     #[test]
     fn test_scan_record() {
         let db = SqliteDatabase::in_memory().unwrap();
-        let scan = ScanRecord::new(
-            "/test".to_string(),
-            100,
-            1024000,
-            5,
-        );
+        let scan = ScanRecord::new("/test".to_string(), 100, 1024000, 5);
 
         let id = db.insert_scan(&scan).unwrap();
         assert!(id > 0);

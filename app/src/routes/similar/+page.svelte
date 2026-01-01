@@ -158,7 +158,7 @@
         <div class="bg-white rounded-lg shadow p-6">
           <div class="flex justify-between items-center mb-4">
             <h3 class="text-lg font-semibold text-gray-900">
-              Group {idx + 1} - {group.files.length} similar images ({(group.similarity * 100).toFixed(1)}% similar)
+              Group {idx + 1} - {group.files.length} similar images ({(group.similarity_score * 100).toFixed(1)}% similar)
             </h3>
             <button
               onclick={() => selectAllInGroup(group, true)}
@@ -180,7 +180,7 @@
                   </svg>
                 </div>
                 <div class="text-xs">
-                  <p class="font-medium text-gray-900 truncate" title={file.name}>{file.name}</p>
+                  <p class="font-medium text-gray-900 truncate" title={file.path}>{file.path}</p>
                   <p class="text-gray-500 mt-1">{formatSize(file.size)}</p>
                   {#if fileIdx === 0}
                     <span class="inline-block mt-2 px-2 py-1 text-xs bg-green-100 text-green-800 rounded">Original</span>

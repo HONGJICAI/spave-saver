@@ -1,6 +1,5 @@
-use std::path::Path;
-use std::collections::HashSet;
 use crate::scanner::FileInfo;
+use std::collections::HashSet;
 
 /// File filter trait
 pub trait Filter {
@@ -120,7 +119,7 @@ impl AndFilter {
         }
     }
 
-    pub fn add(mut self, filter: Box<dyn Filter + Send + Sync>) -> Self {
+    pub fn with_filter(mut self, filter: Box<dyn Filter + Send + Sync>) -> Self {
         self.filters.push(filter);
         self
     }
@@ -150,7 +149,7 @@ impl OrFilter {
         }
     }
 
-    pub fn add(mut self, filter: Box<dyn Filter + Send + Sync>) -> Self {
+    pub fn with_filter(mut self, filter: Box<dyn Filter + Send + Sync>) -> Self {
         self.filters.push(filter);
         self
     }
@@ -215,8 +214,8 @@ impl FileFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use crate::scanner::FileType;
+    use std::path::PathBuf;
 
     fn create_test_file(path: &str, size: u64) -> FileInfo {
         FileInfo {
@@ -281,15 +280,15 @@ mod tests {
     #[test]
     fn test_and_filter() {
         let filter = AndFilter::new()
-            .add(Box::new(MinSizeFilter::new(100)))
-            .add(Box::new(MaxSizeFilter::new(1000)));
+            .with_filter(Box::new(MinSizeFilter::new(100)))
+            .with_filter(Box::new(MaxSizeFilter::new(1000)));
 
         let file1 = create_test_file("test1.txt", 50);
         let file2 = create_test_file("test2.txt", 500);
         let file3 = create_test_file("test3.txt", 1500);
 
         assert!(!filter.apply(&file1)); // Too small
-        assert!(filter.apply(&file2));  // Just right
+        assert!(filter.apply(&file2)); // Just right
         assert!(!filter.apply(&file3)); // Too large
     }
 }

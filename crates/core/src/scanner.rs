@@ -1,8 +1,8 @@
-use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
-use walkdir::WalkDir;
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use tracing::{debug, info};
+use walkdir::WalkDir;
 
 /// File information structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,7 +53,8 @@ impl DefaultFileScanner {
     }
 
     fn determine_file_type(path: &Path) -> FileType {
-        let ext = path.extension()
+        let ext = path
+            .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
@@ -79,8 +80,7 @@ impl FileScanner for DefaultFileScanner {
         info!("Starting scan of: {}", path.display());
         let mut results = Vec::new();
 
-        let mut walker = WalkDir::new(path)
-            .follow_links(self.follow_links);
+        let mut walker = WalkDir::new(path).follow_links(self.follow_links);
 
         if let Some(depth) = self.max_depth {
             walker = walker.max_depth(depth);
@@ -90,13 +90,18 @@ impl FileScanner for DefaultFileScanner {
             let metadata = match entry.metadata() {
                 Ok(m) => m,
                 Err(e) => {
-                    debug!("Failed to read metadata for {}: {}", entry.path().display(), e);
+                    debug!(
+                        "Failed to read metadata for {}: {}",
+                        entry.path().display(),
+                        e
+                    );
                     continue;
                 }
             };
 
             if metadata.is_file() {
-                let modified = metadata.modified()
+                let modified = metadata
+                    .modified()
                     .ok()
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| d.as_secs() as i64)

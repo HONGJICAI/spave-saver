@@ -17,7 +17,7 @@ export function formatSize(bytes: number): string {
   if (unitIndex === 0) {
     return `${size} ${units[unitIndex]}`;
   } else {
-    return `${size.toFixed(2)} ${units[unitIndex]}`;
+    return `${size.toFixed(1)} ${units[unitIndex]}`;
   }
 }
 

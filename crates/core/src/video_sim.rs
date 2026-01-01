@@ -1,5 +1,5 @@
+use anyhow::{anyhow, Result};
 use std::path::Path;
-use anyhow::{Result, anyhow};
 
 /// Video similarity algorithm trait
 pub trait VideoSimilarityAlgorithm {
@@ -33,7 +33,9 @@ impl VideoSimilarity {
     fn extract_metadata(&self, _path: &Path) -> Result<VideoMetadata> {
         // TODO: Implement with ffmpeg bindings
         // For now, return a placeholder
-        Err(anyhow!("Video metadata extraction not yet implemented. Requires ffmpeg."))
+        Err(anyhow!(
+            "Video metadata extraction not yet implemented. Requires ffmpeg."
+        ))
     }
 
     /// Extract frame samples from video
@@ -41,7 +43,9 @@ impl VideoSimilarity {
     fn extract_frame_samples(&self, _path: &Path) -> Result<Vec<Vec<u8>>> {
         // TODO: Implement with ffmpeg bindings
         // Sample frames at regular intervals (e.g., every N seconds)
-        Err(anyhow!("Video frame extraction not yet implemented. Requires ffmpeg."))
+        Err(anyhow!(
+            "Video frame extraction not yet implemented. Requires ffmpeg."
+        ))
     }
 
     /// Compare two sets of frame samples
