@@ -61,11 +61,12 @@ jobs:
           - platform: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             bundles: deb,appimage
-          # Windows ships as a single portable exe (no installer);
-          # it only requires the WebView2 runtime, which is preinstalled
-          # on Windows 11 and on up-to-date Windows 10.
+          # Windows ships installers (msi, nsis) plus a single portable exe;
+          # the portable exe requires the WebView2 runtime, which is
+          # preinstalled on Windows 11 and on up-to-date Windows 10.
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
+            bundles: msi,nsis
           - platform: macos-latest
             target: aarch64-apple-darwin
             bundles: dmg
@@ -124,11 +125,8 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
-      - name: Build portable exe (Windows)
-        if: matrix.platform == 'windows-latest'
-        working-directory: ./app
-        run: pnpm tauri build --target ${{ matrix.target }} --no-bundle
-
+      # The installer build above already produces the bare exe,
+      # so it just needs to be uploaded as a portable variant.
       - name: Upload portable exe to release (Windows)
         if: matrix.platform == 'windows-latest'
         uses: actions/github-script@v7
