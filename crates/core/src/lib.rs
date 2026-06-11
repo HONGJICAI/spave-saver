@@ -9,8 +9,8 @@ pub mod video_sim;
 
 pub use compress::Compressor;
 pub use compress_plugins::{
-    global_plugin_manager, init_plugin_manager_with, CompressionPlugin, CompressionResult,
-    PluginManager, PluginMetadata,
+    global_plugin_manager, init_plugin_manager_with, CompressionOutcome, CompressionPlugin,
+    CompressionResult, PluginManager, PluginMetadata,
 };
 pub use filters::FileFilter;
 pub use hash::{FileHasher, HashAlgorithm};

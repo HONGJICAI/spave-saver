@@ -247,7 +247,6 @@ impl CompressionPlugin for ImageZipToWebpZipPlugin {
         };
 
         let output_path = output_dir.join(&output_filename);
-        let backup_path = source.with_extension(".backup");
 
         // Ensure output directory exists
         fs::create_dir_all(output_dir)?;
@@ -259,28 +258,13 @@ impl CompressionPlugin for ImageZipToWebpZipPlugin {
             ));
         }
 
-        if backup_path.exists() {
-            return Err(anyhow!(
-                "Backup file {} already exists",
-                backup_path.display()
-            ));
-        }
-
-        // Process the ZIP file
+        // Process the ZIP file; the manager backs up the original and moves
+        // the output over the source path (replace_source)
         let (files_processed, _original_total, _compressed_total) = self
             .process_zip(source, &output_path)
             .with_context(|| format!("Failed to process ZIP file: {}", source.display()))?;
 
         let compressed_size = get_file_size(&output_path)?;
-
-        // Rename the origin file as backup and move the new ZIP to original location
-        fs::rename(source, backup_path)?;
-        fs::rename(&output_path, source).with_context(|| {
-            format!(
-                "Failed to move converted ZIP to original location: {}",
-                source.display()
-            )
-        })?;
 
         Ok(CompressionResult {
             original_size,
@@ -289,11 +273,21 @@ impl CompressionPlugin for ImageZipToWebpZipPlugin {
             plugin_name: self.metadata().name,
             files_processed,
             backup_path: None,
+            replace_source: true,
         })
     }
 
     fn supported_extensions(&self) -> Vec<&str> {
         vec!["zip"]
+    }
+
+    fn quality(&self) -> Option<f32> {
+        Some(self.quality)
+    }
+
+    fn set_quality(&mut self, quality: f32) -> bool {
+        self.quality = quality.clamp(0.0, 100.0);
+        true
     }
 }
 

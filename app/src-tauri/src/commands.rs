@@ -122,9 +122,20 @@ pub async fn get_compression_plugins() -> Result<Vec<serde_json::Value>, String>
                 "name": p.name,
                 "description": p.description,
                 "version": p.version,
+                "quality": manager.get_plugin_quality(&p.name),
             })
         })
         .collect())
+}
+
+/// Set the quality (0-100) of a compression plugin
+#[tauri::command]
+pub async fn set_plugin_quality(plugin_name: String, quality: f32) -> Result<(), String> {
+    let manager = space_saver_core::compress_plugins::global_plugin_manager();
+    let mut manager = manager.write().map_err(|e| e.to_string())?;
+    manager
+        .set_plugin_quality(&plugin_name, quality)
+        .map_err(|e| e.to_string())
 }
 
 /// Scan paths and find compressible files with estimates
@@ -197,21 +208,70 @@ pub async fn scan_compressible_files(
         all_files.extend(files);
     }
 
-    // Step 3: Try to apply plugins on each file
+    // Step 3: Try each active plugin (in order) on each file, collecting
+    // rejection reasons along the way in a single pass
     let mut compressible_files = Vec::new();
     let mut rejected_files = Vec::new();
 
     for file_info in all_files {
-        match check_file_compressibility(&file_info.path, &manager, &active_plugins)? {
-            Some(compress_info) => {
-                compressible_files.push(compress_info);
+        let mut rejection_reasons = Vec::new();
+        let mut accepted = None;
+
+        for plugin_name in &active_plugins {
+            match manager.check_plugin_capability(&file_info.path, plugin_name) {
+                Ok(Some((metadata, can_handle, reason, estimate_ratio))) => {
+                    if can_handle {
+                        let ratio = estimate_ratio.unwrap_or(0.0);
+                        let estimated_compressed =
+                            (file_info.size as f64 * (1.0 - ratio as f64)) as u64;
+                        let estimated_savings =
+                            file_info.size.saturating_sub(estimated_compressed);
+
+                        accepted = Some(serde_json::json!({
+                            "path": file_info.path.to_string_lossy(),
+                            "original_size": file_info.size,
+                            "estimated_compressed_size": estimated_compressed,
+                            "estimated_savings": estimated_savings,
+                            "plugin_name": metadata.name,
+                            "can_handle": true,
+                            "reason": reason,
+                        }));
+                        break;
+                    }
+
+                    rejection_reasons.push(serde_json::json!({
+                        "plugin_name": metadata.name,
+                        "reason": reason.unwrap_or_else(|| "Unknown reason".to_string()),
+                    }));
+                }
+                // Plugin not found (already validated above), skip
+                Ok(None) => continue,
+                // A plugin failing on one file (e.g. a corrupt archive) must
+                // not abort the whole scan; record it as a rejection reason
+                Err(e) => {
+                    rejection_reasons.push(serde_json::json!({
+                        "plugin_name": plugin_name,
+                        "reason": format!("Error: {}", e),
+                    }));
+                }
             }
+        }
+
+        match accepted {
+            Some(compress_info) => compressible_files.push(compress_info),
             None => {
-                // File was rejected by all plugins, collect rejection reasons
-                if let Some(rejection_info) =
-                    get_file_rejection_reasons(&file_info.path, &manager, &active_plugins)?
-                {
-                    rejected_files.push(rejection_info);
+                if !rejection_reasons.is_empty() {
+                    let extension = file_info
+                        .path
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .unwrap_or("");
+                    rejected_files.push(serde_json::json!({
+                        "path": file_info.path.to_string_lossy(),
+                        "size": file_info.size,
+                        "extension": extension,
+                        "rejection_reasons": rejection_reasons,
+                    }));
                 }
             }
         }
@@ -223,136 +283,16 @@ pub async fn scan_compressible_files(
     }))
 }
 
-fn check_file_compressibility(
-    path: &PathBuf,
-    manager: &space_saver_core::PluginManager,
-    active_plugins: &[String],
-) -> Result<Option<serde_json::Value>, String> {
-    use std::fs;
-
-    // Try each candidate plugin in order
-    for plugin_name in active_plugins {
-        // Check if this plugin can handle the file
-        match manager.check_plugin_capability(path, plugin_name) {
-            Ok(Some((metadata, can_handle, reason, estimate_ratio))) => {
-                if can_handle {
-                    // Plugin can handle this file
-                    // Get file size
-                    let file_size = fs::metadata(path).map_err(|e| e.to_string())?.len();
-
-                    // Estimate compressed size
-                    let ratio = estimate_ratio.unwrap_or(0.0);
-                    let estimated_compressed = (file_size as f64 * (1.0 - ratio as f64)) as u64;
-                    let estimated_savings = file_size.saturating_sub(estimated_compressed);
-
-                    return Ok(Some(serde_json::json!({
-                        "path": path.to_string_lossy(),
-                        "original_size": file_size,
-                        "estimated_compressed_size": estimated_compressed,
-                        "estimated_savings": estimated_savings,
-                        "plugin_name": metadata.name,
-                        "can_handle": true,
-                        "reason": reason,
-                    })));
-                } else {
-                    // Plugin cannot handle this file, continue to next plugin
-                    // We could log the reason here for debugging
-                    continue;
-                }
-            }
-            Ok(None) => {
-                // Plugin not found, skip
-                continue;
-            }
-            Err(e) => {
-                // Error checking plugin capability
-                return Err(e.to_string());
-            }
-        }
-    }
-
-    // No plugin could handle this file
-    Ok(None)
-}
-
-fn get_file_rejection_reasons(
-    path: &PathBuf,
-    manager: &space_saver_core::PluginManager,
-    active_plugins: &[String],
-) -> Result<Option<serde_json::Value>, String> {
-    use std::fs;
-
-    // Get file extension
-    let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
-
-    // Get all plugins in registration order
-    let all_plugins = manager.get_plugins();
-
-    // Get plugins by extension and filter to only active ones
-    let extension_plugins = manager.get_plugins_by_extension(extension);
-    let mut candidate_plugins: Vec<String> = extension_plugins
-        .iter()
-        .filter(|p| active_plugins.contains(&p.name))
-        .map(|p| p.name.clone())
-        .collect();
-
-    // If no plugins match by extension, try all active plugins in order
-    if candidate_plugins.is_empty() {
-        candidate_plugins = all_plugins
-            .iter()
-            .filter(|p| active_plugins.contains(&p.name))
-            .map(|p| p.name.clone())
-            .collect();
-    }
-
-    // Collect rejection reasons from all plugins
-    let mut rejection_reasons = Vec::new();
-
-    for plugin_name in candidate_plugins {
-        // Check if this plugin can handle the file
-        match manager.check_plugin_capability(path, &plugin_name) {
-            Ok(Some((metadata, can_handle, reason, _))) => {
-                if !can_handle {
-                    rejection_reasons.push(serde_json::json!({
-                        "plugin_name": metadata.name,
-                        "reason": reason.unwrap_or_else(|| "Unknown reason".to_string()),
-                    }));
-                }
-            }
-            Ok(None) => {
-                // Plugin not found, skip
-                continue;
-            }
-            Err(e) => {
-                rejection_reasons.push(serde_json::json!({
-                    "plugin_name": plugin_name,
-                    "reason": format!("Error: {}", e),
-                }));
-            }
-        }
-    }
-
-    if rejection_reasons.is_empty() {
-        return Ok(None);
-    }
-
-    // Get file size
-    let file_size = fs::metadata(path).map_err(|e| e.to_string())?.len();
-
-    Ok(Some(serde_json::json!({
-        "path": path.to_string_lossy(),
-        "size": file_size,
-        "extension": extension,
-        "rejection_reasons": rejection_reasons,
-    })))
-}
-
-/// Compress files in place (rename original to .backup, create compressed with original name)
+/// Compress files in place. The manager renames the original to `<name>.bak`
+/// (the backup) and keeps the compressed output next to it. Each file ends up
+/// in one of three states: "compressed", "skipped" (output was not smaller,
+/// original kept untouched), or "failed".
 #[tauri::command]
 pub async fn compress_files_in_place(
     file_paths: Vec<String>,
     plugin_orders: Vec<String>, // Ordered list of active plugin names
 ) -> Result<Vec<serde_json::Value>, String> {
+    use space_saver_core::CompressionOutcome;
     use std::path::PathBuf;
 
     // Get the global plugin manager (all plugins pre-registered with priorities)
@@ -373,6 +313,7 @@ pub async fn compress_files_in_place(
 
         if !source.exists() {
             results.push(serde_json::json!({
+                "status": "failed",
                 "success": false,
                 "path": path_str,
                 "error": "File not found",
@@ -382,10 +323,12 @@ pub async fn compress_files_in_place(
 
         let source_dir = source.parent().ok_or("Failed to get parent directory")?;
 
-        // Process file in-place using plugin's built-in backup logic with plugin order preference
+        // Only the plugins listed in plugin_orders are considered; the
+        // manager performs the backup before replacing anything
         match manager.process_file(&source, source_dir, orders) {
-            Ok(compress_result) => {
+            Ok(CompressionOutcome::Compressed(compress_result)) => {
                 results.push(serde_json::json!({
+                    "status": "compressed",
                     "success": true,
                     "path": compress_result.output_path.to_string_lossy(),
                     "backup_path": compress_result.backup_path.as_ref().map(|p| p.to_string_lossy()),
@@ -395,8 +338,21 @@ pub async fn compress_files_in_place(
                     "plugin_name": compress_result.plugin_name,
                 }));
             }
+            Ok(CompressionOutcome::Skipped {
+                plugin_name,
+                reason,
+            }) => {
+                results.push(serde_json::json!({
+                    "status": "skipped",
+                    "success": true,
+                    "path": path_str,
+                    "plugin_name": plugin_name,
+                    "reason": reason,
+                }));
+            }
             Err(e) => {
                 results.push(serde_json::json!({
+                    "status": "failed",
                     "success": false,
                     "path": path_str,
                     "error": e.to_string(),

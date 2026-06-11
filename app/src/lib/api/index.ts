@@ -128,6 +128,8 @@ export interface CompressionPlugin {
   name: string;
   description: string;
   version: string;
+  /** Quality setting (0-100), or null if the plugin has no quality knob */
+  quality?: number | null;
 }
 
 /**
@@ -203,9 +205,18 @@ export interface ScanCompressibleResult {
 }
 
 /**
+ * Status of an in-place compression:
+ * - compressed: original renamed to backup, smaller file written
+ * - skipped: output was not smaller, original kept untouched
+ * - failed: an error occurred, original kept untouched
+ */
+export type CompressionStatus = "compressed" | "skipped" | "failed";
+
+/**
  * In-place compression result
  */
 export interface InPlaceCompressionResult {
+  status: CompressionStatus;
   success: boolean;
   path: string;
   backup_path?: string;
@@ -213,6 +224,7 @@ export interface InPlaceCompressionResult {
   compressed_size?: number;
   savings?: number;
   plugin_name?: string;
+  reason?: string;
   error?: string;
 }
 
@@ -228,15 +240,33 @@ export async function getCompressionPlugins(): Promise<CompressionPlugin[]> {
       {
         name: "Image ZIP to WebP ZIP",
         description: "Converts images inside ZIP archives to WebP format",
-        version: "1.0.0"
+        version: "1.0.0",
+        quality: 85
       },
       {
         name: "WebP Converter",
         description: "Converts PNG, JPEG, and other image formats to WebP",
-        version: "1.0.0"
+        version: "1.0.0",
+        quality: 85
+      },
+      {
+        name: "Animated WebP Converter",
+        description: "Convert GIF to Animated WebP with lossy compression for better file size",
+        version: "1.0.0",
+        quality: 85
       }
     ];
   }
+}
+
+/**
+ * Set the quality (0-100) of a compression plugin
+ */
+export async function setPluginQuality(pluginName: string, quality: number): Promise<void> {
+  if (isTauri) {
+    await invoke("set_plugin_quality", { pluginName, quality });
+  }
+  // Web mode: no-op (mock plugins keep their displayed value in the UI)
 }
 
 /**
@@ -304,9 +334,10 @@ export async function compressFilesInPlace(
   } else {
     // Mock in-place compression
     return filePaths.map(path => ({
+      status: "compressed" as const,
       success: true,
       path,
-      backup_path: `${path}.backup`,
+      backup_path: `${path}.bak`,
       original_size: 1024000,
       compressed_size: 716800,
       savings: 307200,

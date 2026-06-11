@@ -19,6 +19,7 @@ pub fn run() {
             delete_files,
             get_storage_stats,
             get_compression_plugins,
+            set_plugin_quality,
             scan_compressible_files,
             compress_files_in_place
         ])

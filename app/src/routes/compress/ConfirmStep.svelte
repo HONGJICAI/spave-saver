@@ -10,8 +10,9 @@
     compressing: boolean;
     processedCount: number;
     totalToProcess: number;
-    successCount: number;
-    errorCount: number;
+    compressedCount: number;
+    skippedCount: number;
+    failedCount: number;
     onToggleFile: (path: string) => void;
     onToggleAll: () => void;
     onBack: () => void;
@@ -26,8 +27,9 @@
     compressing,
     processedCount,
     totalToProcess,
-    successCount,
-    errorCount,
+    compressedCount,
+    skippedCount,
+    failedCount,
     onToggleFile,
     onToggleAll,
     onBack,
@@ -121,9 +123,10 @@
           style="width: {totalToProcess > 0 ? (processedCount / totalToProcess * 100).toFixed(1) : 0}%"
         ></div>
       </div>
-      <div class="mt-2 text-xs text-gray-600">
-        <p>• {successCount} successful</p>
-        <p>• {errorCount} failed</p>
+      <div class="mt-2 text-xs text-gray-600 flex gap-4">
+        <p>• {compressedCount} compressed</p>
+        <p>• {skippedCount} skipped</p>
+        <p>• {failedCount} failed</p>
       </div>
     </div>
   {/if}
@@ -139,7 +142,7 @@
         {selectedFiles.size === compressibleFiles.length ? 'Deselect All' : 'Select All'}
       </button>
     </div>
-    <div class="border rounded-lg divide-y max-h-[400px] overflow-y-auto">
+    <div class="border rounded-lg divide-y max-h-[40vh] overflow-y-auto">
       {#each compressibleFiles as file}
         <FileListItem 
           {file} 

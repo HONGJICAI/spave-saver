@@ -3,6 +3,7 @@
   import { appState } from "$lib/stores/app";
   import {
     getCompressionPlugins,
+    setPluginQuality,
     scanCompressibleFiles,
     compressFilesInPlace,
     type CompressionPlugin,
@@ -10,11 +11,19 @@
     type RejectedFile,
     type InPlaceCompressionResult,
   } from "$lib/api";
+  import { loadFromStorage, saveToStorage, storageKeys } from "$lib/utils/storage";
   import PluginSelector from "./PluginSelector.svelte";
   import StepIndicator from "./StepIndicator.svelte";
   import ScanStep from "./ScanStep.svelte";
   import ConfirmStep from "./ConfirmStep.svelte";
   import ProcessStep from "./ProcessStep.svelte";
+
+  interface CompressSettings {
+    order: string[];
+    active: string[];
+    poolSize: number;
+    quality: Record<string, number>;
+  }
 
   let availablePlugins = $state<CompressionPlugin[]>([]);
   let activePlugins = $state<Set<string>>(new Set());
@@ -24,26 +33,62 @@
   let selectedFiles = $state<Set<string>>(new Set());
   let compressing = $state(false);
   let compressionResults = $state<InPlaceCompressionResult[]>([]);
-  
+
   // Worker pool configuration
   let poolSize = $state(2);
   let processedCount = $state(0);
   let totalToProcess = $state(0);
   let currentlyProcessing = $state<string[]>([]);
-  
+
   // Step management
   type Step = 'scan' | 'confirm' | 'process';
   let currentStep = $state<Step>('scan');
 
+  let compressedCount = $derived(compressionResults.filter(r => r.status === 'compressed').length);
+  let skippedCount = $derived(compressionResults.filter(r => r.status === 'skipped').length);
+  let failedCount = $derived(compressionResults.filter(r => r.status === 'failed').length);
+
   onMount(async () => {
     try {
-      availablePlugins = await getCompressionPlugins();
-      activePlugins = new Set(availablePlugins.map(p => p.name));
+      const plugins = await getCompressionPlugins();
+      const saved = loadFromStorage<CompressSettings | null>(storageKeys.COMPRESS_SETTINGS, null);
+
+      if (saved) {
+        const rank = new Map(saved.order.map((name, i) => [name, i]));
+        plugins.sort(
+          (a, b) => (rank.get(a.name) ?? saved.order.length) - (rank.get(b.name) ?? saved.order.length)
+        );
+        activePlugins = new Set(plugins.filter(p => saved.active.includes(p.name)).map(p => p.name));
+        poolSize = saved.poolSize ?? 2;
+        for (const plugin of plugins) {
+          const quality = saved.quality?.[plugin.name];
+          if (quality != null && plugin.quality != null && quality !== plugin.quality) {
+            plugin.quality = quality;
+            setPluginQuality(plugin.name, quality).catch(err =>
+              console.error(`Failed to restore quality for ${plugin.name}:`, err)
+            );
+          }
+        }
+      } else {
+        activePlugins = new Set(plugins.map(p => p.name));
+      }
+      availablePlugins = plugins;
     } catch (err) {
       console.error("Failed to load plugins:", err);
       $appState.error = "Failed to load compression plugins";
     }
   });
+
+  function persistSettings() {
+    saveToStorage<CompressSettings>(storageKeys.COMPRESS_SETTINGS, {
+      order: availablePlugins.map(p => p.name),
+      active: Array.from(activePlugins),
+      poolSize,
+      quality: Object.fromEntries(
+        availablePlugins.filter(p => p.quality != null).map(p => [p.name, p.quality!])
+      ),
+    });
+  }
 
   function togglePlugin(pluginName: string) {
     if (activePlugins.has(pluginName)) {
@@ -52,6 +97,7 @@
       activePlugins.add(pluginName);
     }
     activePlugins = new Set(activePlugins);
+    persistSettings();
   }
 
   function getActivePlugins(): string[] {
@@ -65,6 +111,7 @@
       const newPlugins = [...availablePlugins];
       [newPlugins[index - 1], newPlugins[index]] = [newPlugins[index], newPlugins[index - 1]];
       availablePlugins = newPlugins;
+      persistSettings();
     }
   }
 
@@ -73,7 +120,25 @@
       const newPlugins = [...availablePlugins];
       [newPlugins[index], newPlugins[index + 1]] = [newPlugins[index + 1], newPlugins[index]];
       availablePlugins = newPlugins;
+      persistSettings();
     }
+  }
+
+  async function handleQualityChange(pluginName: string, quality: number) {
+    availablePlugins = availablePlugins.map(p =>
+      p.name === pluginName ? { ...p, quality } : p
+    );
+    persistSettings();
+    try {
+      await setPluginQuality(pluginName, quality);
+    } catch (err) {
+      $appState.error = err instanceof Error ? err.message : "Failed to update plugin quality";
+    }
+  }
+
+  function handlePoolSizeChange(size: number) {
+    poolSize = size;
+    persistSettings();
   }
 
   async function handleScan() {
@@ -92,7 +157,7 @@
     selectedFiles.clear();
     try {
       const result = await scanCompressibleFiles(
-        $appState.scanPaths, 
+        $appState.scanPaths,
         getActivePlugins(),
         $appState.filterConfig
       );
@@ -129,30 +194,30 @@
       $appState.error = "Please select files to compress";
       return;
     }
-    
+
     currentStep = 'process';
     compressing = true;
     $appState.error = null;
     compressionResults = [];
     processedCount = 0;
     currentlyProcessing = [];
-    
+
     try {
       const filesToCompress = Array.from(selectedFiles);
       totalToProcess = filesToCompress.length;
       const plugins = getActivePlugins();
-      
+
       const pool: Promise<void>[] = [];
       let fileIndex = 0;
-      
+
       const worker = async () => {
         while (fileIndex < filesToCompress.length) {
           const currentIndex = fileIndex++;
           const filePath = filesToCompress[currentIndex];
-          
+
           // Add to currently processing
           currentlyProcessing = [...currentlyProcessing, filePath];
-          
+
           try {
             const results = await compressFilesInPlace([filePath], plugins);
             compressionResults = [...compressionResults, ...results];
@@ -160,22 +225,23 @@
             console.error(`Failed to compress ${filePath}:`, err);
             compressionResults = [...compressionResults, {
               path: filePath,
+              status: 'failed',
               success: false,
               error: err instanceof Error ? err.message : "Unknown error"
             }];
           }
-          
+
           // Remove from currently processing
           currentlyProcessing = currentlyProcessing.filter(p => p !== filePath);
           processedCount++;
           await new Promise(resolve => setTimeout(resolve, 10));
         }
       };
-      
+
       for (let i = 0; i < poolSize; i++) {
         pool.push(worker());
       }
-      
+
       await Promise.all(pool);
     } catch (err) {
       $appState.error = err instanceof Error ? err.message : "Failed to compress files";
@@ -192,7 +258,7 @@
     }
     currentStep = 'confirm';
   }
-  
+
   function startNewScan() {
     currentStep = 'scan';
     compressionResults = [];
@@ -205,80 +271,90 @@
   }
 </script>
 
-<div class="p-6 max-w-[1600px] mx-auto">
-  <div class="mb-6">
+<div class="h-full flex flex-col max-w-[1600px] mx-auto w-full">
+  <div class="mb-4 shrink-0">
     <h1 class="text-3xl font-bold text-gray-900 mb-2">Smart Compression Manager</h1>
     <p class="text-gray-600">Manage plugins, scan files, and compress with backups</p>
   </div>
 
-  <StepIndicator 
-    {currentStep}
-    hasScannedFiles={compressibleFiles.length > 0}
-    hasResults={compressionResults.length > 0}
-    isCompressing={compressing}
-  />
+  <div class="shrink-0">
+    <StepIndicator
+      {currentStep}
+      hasScannedFiles={compressibleFiles.length > 0}
+      hasResults={compressionResults.length > 0}
+      isCompressing={compressing}
+    />
+  </div>
 
   {#if $appState.error}
-    <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+    <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4 shrink-0">
       {$appState.error}
     </div>
   {/if}
 
   {#if currentStep === 'scan'}
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <div class="lg:col-span-1">
-        <PluginSelector 
-          plugins={availablePlugins}
-          {activePlugins}
-          onToggle={togglePlugin}
-          onMoveUp={movePluginUp}
-          onMoveDown={movePluginDown}
-        />
-      </div>
+    <div class="flex-1 min-h-0 overflow-y-auto">
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="lg:col-span-1 min-w-0">
+          <PluginSelector
+            plugins={availablePlugins}
+            {activePlugins}
+            onToggle={togglePlugin}
+            onMoveUp={movePluginUp}
+            onMoveDown={movePluginDown}
+            onQualityChange={handleQualityChange}
+          />
+        </div>
 
-      <div class="lg:col-span-2">
-        <ScanStep 
-          {compressibleFiles}
-          {rejectedFiles}
-          {selectedFiles}
-          {scanning}
-          scanPaths={$appState.scanPaths}
-          onScan={handleScan}
-          onToggleFile={toggleFileSelection}
-          onToggleAll={toggleAllFiles}
-          onNext={goToConfirm}
-        />
+        <div class="lg:col-span-2 min-w-0">
+          <ScanStep
+            {compressibleFiles}
+            {rejectedFiles}
+            {selectedFiles}
+            {scanning}
+            scanPaths={$appState.scanPaths}
+            onScan={handleScan}
+            onToggleFile={toggleFileSelection}
+            onToggleAll={toggleAllFiles}
+            onNext={goToConfirm}
+          />
+        </div>
       </div>
     </div>
   {/if}
 
   {#if currentStep === 'confirm'}
-    <ConfirmStep 
-      {compressibleFiles}
-      {selectedFiles}
-      {poolSize}
-      {compressing}
-      {processedCount}
-      {totalToProcess}
-      successCount={compressionResults.filter(r => r.success).length}
-      errorCount={compressionResults.filter(r => !r.success).length}
-      onToggleFile={toggleFileSelection}
-      onToggleAll={toggleAllFiles}
-      onBack={() => currentStep = 'scan'}
-      onCompress={handleCompress}
-      onPoolSizeChange={(size) => poolSize = size}
-    />
+    <div class="flex-1 min-h-0 overflow-y-auto">
+      <ConfirmStep
+        {compressibleFiles}
+        {selectedFiles}
+        {poolSize}
+        {compressing}
+        {processedCount}
+        {totalToProcess}
+        {compressedCount}
+        {skippedCount}
+        {failedCount}
+        onToggleFile={toggleFileSelection}
+        onToggleAll={toggleAllFiles}
+        onBack={() => currentStep = 'scan'}
+        onCompress={handleCompress}
+        onPoolSizeChange={handlePoolSizeChange}
+      />
+    </div>
   {/if}
 
   {#if currentStep === 'process'}
-    <ProcessStep 
-      results={compressionResults}
-      {compressing}
-      {processedCount}
-      {totalToProcess}
-      {poolSize}
-      {currentlyProcessing}
-      onStartNew={startNewScan}
-    />
+    <div class="flex-1 min-h-0 overflow-y-auto">
+      <ProcessStep
+        results={compressionResults}
+        {compressing}
+        {processedCount}
+        {totalToProcess}
+        {poolSize}
+        {currentlyProcessing}
+        onStartNew={startNewScan}
+      />
+    </div>
   {/if}
 </div>

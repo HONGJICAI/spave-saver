@@ -7,9 +7,10 @@
     onToggle: (pluginName: string) => void;
     onMoveUp: (index: number) => void;
     onMoveDown: (index: number) => void;
+    onQualityChange: (pluginName: string, quality: number) => void;
   };
 
-  let { plugins, activePlugins, onToggle, onMoveUp, onMoveDown }: Props = $props();
+  let { plugins, activePlugins, onToggle, onMoveUp, onMoveDown, onQualityChange }: Props = $props();
 </script>
 
 <div class="bg-white rounded-lg shadow p-6">
@@ -32,6 +33,22 @@
             </div>
           </label>
         </div>
+        {#if plugin.quality != null}
+          <div class="flex items-center gap-2 mt-2">
+            <span class="text-xs {activePlugins.has(plugin.name) ? 'text-gray-600' : 'text-gray-400'} w-12 shrink-0">Quality</span>
+            <input
+              type="range"
+              min="1"
+              max="100"
+              value={plugin.quality}
+              onchange={(e) => onQualityChange(plugin.name, parseInt((e.target as HTMLInputElement).value))}
+              disabled={!activePlugins.has(plugin.name)}
+              class="flex-1 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer disabled:cursor-not-allowed min-w-0"
+              aria-label={`Quality for ${plugin.name}`}
+            />
+            <span class="text-xs font-semibold {activePlugins.has(plugin.name) ? 'text-gray-700' : 'text-gray-400'} w-7 text-right shrink-0">{plugin.quality}</span>
+          </div>
+        {/if}
         <div class="flex items-center justify-between mt-2 pt-2 border-t {activePlugins.has(plugin.name) ? 'border-blue-200' : 'border-gray-200'}">
           <span class="text-xs {activePlugins.has(plugin.name) ? 'text-blue-700' : 'text-gray-500'} font-medium">
             Order: #{index + 1}

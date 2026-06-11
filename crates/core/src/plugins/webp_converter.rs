@@ -263,56 +263,17 @@ impl CompressionPlugin for WebPConverterPlugin {
         let output_filename = generate_output_filename(source, "webp");
         let output_path = output_dir.join(&output_filename);
 
-        // Convert to WebP
+        // Convert to WebP; the manager handles size comparison and backups
         self.convert_to_webp(source, &output_path)
             .with_context(|| format!("Failed to convert {} to WebP", source.display()))?;
 
         let compressed_size = get_file_size(&output_path)?;
 
-        // Check if conversion actually saved space
-        if compressed_size >= original_size {
-            // WebP is larger or same size - not worth it, remove the WebP file
-            if let Err(e) = fs::remove_file(&output_path) {
-                warn!(
-                    webp_path = %output_path.display(),
-                    error = %e,
-                    "Failed to remove larger WebP file"
-                );
-            }
-
-            info!(
-                source = %source.display(),
-                original_size = original_size,
-                webp_size = compressed_size,
-                "WebP conversion did not reduce file size, keeping original"
-            );
-
-            return Err(anyhow::anyhow!(
-                "WebP conversion resulted in larger file ({} bytes vs {} bytes), keeping original",
-                compressed_size,
-                original_size
-            ));
-        }
-
-        // WebP is smaller - success! Remove the original file
-        if let Err(e) = fs::remove_file(source) {
-            error!(
-                source = %source.display(),
-                error = %e,
-                "Failed to remove original file after successful WebP conversion"
-            );
-            // Clean up the WebP file since we couldn't remove the original
-            let _ = fs::remove_file(&output_path);
-            return Err(anyhow::anyhow!("Failed to remove original file: {}", e).context(e));
-        }
-
         info!(
             source = %source.display(),
             original_size = original_size,
             webp_size = compressed_size,
-            savings = original_size - compressed_size,
-            savings_percent = ((original_size - compressed_size) as f64 / original_size as f64) * 100.0,
-            "Successfully converted to WebP and removed original"
+            "Converted image to WebP"
         );
 
         Ok(CompressionResult {
@@ -322,11 +283,21 @@ impl CompressionPlugin for WebPConverterPlugin {
             plugin_name: self.metadata().name,
             files_processed: 1,
             backup_path: None,
+            replace_source: false,
         })
     }
 
     fn supported_extensions(&self) -> Vec<&str> {
         vec!["png", "jpg", "jpeg", "bmp", "tiff", "tif"]
+    }
+
+    fn quality(&self) -> Option<f32> {
+        Some(self.quality)
+    }
+
+    fn set_quality(&mut self, quality: f32) -> bool {
+        self.quality = quality.clamp(0.0, 100.0);
+        true
     }
 }
 

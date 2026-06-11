@@ -75,8 +75,7 @@
 
 <style>
   aside {
-    height: 100vh;
-    position: sticky;
-    top: 0;
+    height: 100%;
+    flex-shrink: 0;
   }
 </style>
