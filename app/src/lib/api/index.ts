@@ -77,15 +77,43 @@ export async function findEmptyFiles(paths: string[], filter?: FilterConfig): Pr
 }
 
 /**
- * Delete files
+ * How files are removed: "trash" (system recycle bin, recoverable) or
+ * "permanent" (unrecoverable). Defaults to trash.
  */
-export async function deleteFiles(paths: string[]): Promise<number> {
+export type DeleteMode = "trash" | "permanent";
+
+/**
+ * Per-file outcome of a delete operation
+ */
+export interface DeleteResult {
+  path: string;
+  success: boolean;
+  error?: string | null;
+}
+
+/**
+ * Delete files, reporting a per-file outcome
+ */
+export async function deleteFiles(
+  paths: string[],
+  mode: DeleteMode = "trash"
+): Promise<DeleteResult[]> {
   if (isTauri) {
-    return await invoke<number>("delete_files", { paths });
+    return await invoke<DeleteResult[]>("delete_files", { paths, mode });
   } else {
-    // Mock deletion
+    // Mock deletion: "locked" files fail so the error UI can be previewed
     return new Promise((resolve) => {
-      setTimeout(() => resolve(paths.length), 500);
+      setTimeout(
+        () =>
+          resolve(
+            paths.map((path) =>
+              path.includes("locked")
+                ? { path, success: false, error: "Permission denied (os error 13)" }
+                : { path, success: true }
+            )
+          ),
+        300
+      );
     });
   }
 }

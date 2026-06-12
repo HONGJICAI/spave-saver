@@ -1,6 +1,25 @@
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// How files should be removed
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeleteMode {
+    /// Move to the system trash / recycle bin (recoverable)
+    Trash,
+    /// Remove from disk immediately (unrecoverable)
+    Permanent,
+}
+
+/// Per-file outcome of a delete operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteResult {
+    pub path: String,
+    pub success: bool,
+    pub error: Option<String>,
+}
 
 /// File operations (delete, move, copy, etc.)
 pub struct FileOperations;
@@ -25,6 +44,33 @@ impl FileOperations {
             }
         }
         Ok(count)
+    }
+
+    /// Delete files reporting a per-file outcome instead of swallowing
+    /// failures. Trash mode can fail on some mounts (e.g. network drives
+    /// without a trash directory); those files are reported, not deleted.
+    pub fn delete_files_with_mode(&self, paths: &[PathBuf], mode: DeleteMode) -> Vec<DeleteResult> {
+        paths
+            .iter()
+            .map(|path| {
+                let outcome = match mode {
+                    DeleteMode::Trash => trash::delete(path).map_err(|e| e.to_string()),
+                    DeleteMode::Permanent => fs::remove_file(path).map_err(|e| e.to_string()),
+                };
+                match outcome {
+                    Ok(()) => DeleteResult {
+                        path: path.to_string_lossy().to_string(),
+                        success: true,
+                        error: None,
+                    },
+                    Err(e) => DeleteResult {
+                        path: path.to_string_lossy().to_string(),
+                        success: false,
+                        error: Some(e),
+                    },
+                }
+            })
+            .collect()
     }
 
     /// Move a file
@@ -134,6 +180,48 @@ mod tests {
         // Test delete
         ops.delete_file(&copy_path).unwrap();
         assert!(!ops.exists(&copy_path));
+    }
+
+    #[test]
+    fn test_delete_with_mode_reports_per_file_results() {
+        let dir = tempdir().unwrap();
+        let existing = dir.path().join("existing.txt");
+        fs::write(&existing, "content").unwrap();
+        let missing = dir.path().join("missing.txt");
+
+        let ops = FileOperations::new();
+        let results =
+            ops.delete_files_with_mode(&[existing.clone(), missing], DeleteMode::Permanent);
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0].success);
+        assert!(results[0].error.is_none());
+        assert!(!existing.exists());
+
+        // The failure is reported with its reason, not swallowed
+        assert!(!results[1].success);
+        assert!(results[1].error.is_some());
+    }
+
+    #[test]
+    fn test_delete_to_trash() {
+        // Trash availability depends on the environment (e.g. tmpfs mounts
+        // may have no trash directory), so accept either outcome but require
+        // the report to be consistent with the filesystem state
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("trash-me.txt");
+        fs::write(&file, "content").unwrap();
+
+        let ops = FileOperations::new();
+        let results = ops.delete_files_with_mode(&[file.clone()], DeleteMode::Trash);
+
+        assert_eq!(results.len(), 1);
+        if results[0].success {
+            assert!(!file.exists(), "trashed file must be gone from its path");
+        } else {
+            assert!(file.exists(), "failed trash must leave the file in place");
+            assert!(results[0].error.is_some());
+        }
     }
 
     #[test]

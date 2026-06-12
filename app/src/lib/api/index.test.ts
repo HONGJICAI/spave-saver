@@ -70,8 +70,13 @@ describe('API Layer', () => {
       expect(result).toHaveProperty('images');
     });
 
-    it('deleteFiles resolves in web mode', async () => {
-      await expect(deleteFiles(['/file1.txt'])).resolves.toBe(1);
+    it('deleteFiles reports per-file results in web mode', async () => {
+      const results = await deleteFiles(['/file1.txt', '/locked/file2.txt']);
+
+      expect(results).toHaveLength(2);
+      expect(results[0]).toEqual({ path: '/file1.txt', success: true });
+      expect(results[1].success).toBe(false);
+      expect(results[1].error).toBeTruthy();
     });
 
     it('getCompressionPlugins returns all three plugins with quality in web mode', async () => {
