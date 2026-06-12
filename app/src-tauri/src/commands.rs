@@ -518,8 +518,9 @@ mod tests {
     }
 
     /// Tests touching the shared SKIP_CACHE must not run concurrently
-    /// (clear_skip_cache would wipe another test's entries mid-flight)
-    static CACHE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// (clear_skip_cache would wipe another test's entries mid-flight).
+    /// Async-aware so the guard may be held across await points.
+    static CACHE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     #[tokio::test]
     async fn scan_finds_compressible_and_rejected_files() {
@@ -651,7 +652,7 @@ mod tests {
 
     #[tokio::test]
     async fn skip_cache_excludes_unchanged_files_from_scan() {
-        let _guard = CACHE_TEST_LOCK.lock().unwrap();
+        let _guard = CACHE_TEST_LOCK.lock().await;
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("noise.png");
         save_noise_png(&source, 64, 64);
@@ -706,7 +707,7 @@ mod tests {
 
     #[tokio::test]
     async fn skip_cache_clear_restores_files() {
-        let _guard = CACHE_TEST_LOCK.lock().unwrap();
+        let _guard = CACHE_TEST_LOCK.lock().await;
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("photo.png");
         save_noise_png(&source, 32, 32);
@@ -735,7 +736,7 @@ mod tests {
 
     #[tokio::test]
     async fn successful_compression_invalidates_skip_entries() {
-        let _guard = CACHE_TEST_LOCK.lock().unwrap();
+        let _guard = CACHE_TEST_LOCK.lock().await;
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("invalidate-me.png");
         save_noise_png(&source, 64, 64);

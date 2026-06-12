@@ -213,7 +213,7 @@ mod tests {
         fs::write(&file, "content").unwrap();
 
         let ops = FileOperations::new();
-        let results = ops.delete_files_with_mode(&[file.clone()], DeleteMode::Trash);
+        let results = ops.delete_files_with_mode(std::slice::from_ref(&file), DeleteMode::Trash);
 
         assert_eq!(results.len(), 1);
         if results[0].success {

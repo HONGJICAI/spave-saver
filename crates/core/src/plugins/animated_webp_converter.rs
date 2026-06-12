@@ -9,12 +9,9 @@ use std::os::windows::process::CommandExt;
 
 /// External tool used for the conversion, detected once per process
 static AVAILABLE_TOOL: Lazy<Option<&'static str>> = Lazy::new(|| {
-    for tool in ["gif2webp", "ffmpeg"] {
-        if new_command(tool).arg("-version").output().is_ok() {
-            return Some(tool);
-        }
-    }
-    None
+    ["gif2webp", "ffmpeg"]
+        .into_iter()
+        .find(|tool| new_command(tool).arg("-version").output().is_ok())
 });
 
 fn new_command(program: &str) -> Command {

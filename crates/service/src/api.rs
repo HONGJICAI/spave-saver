@@ -167,8 +167,9 @@ impl ServiceApi {
         // `fresh` carries the cache key for newly computed hashes; they are
         // inserted after the parallel section so workers never contend on the
         // cache's write lock
+        type Hashed = (String, FileInfo, Option<(String, FileFingerprint)>);
         let hasher = FileHasher::new_blake3();
-        let hashed: Vec<(String, FileInfo, Option<(String, FileFingerprint)>)> = candidates
+        let hashed: Vec<Hashed> = candidates
             .into_par_iter()
             .filter_map(|file| {
                 let path_str = file.path.to_string_lossy().to_string();
