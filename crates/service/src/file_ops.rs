@@ -46,17 +46,18 @@ impl FileOperations {
         Ok(count)
     }
 
-    /// Delete files reporting a per-file outcome instead of swallowing
-    /// failures. Trash mode can fail on some mounts (e.g. network drives
-    /// without a trash directory); those files are reported, not deleted.
+    /// Delete files or empty directories reporting a per-file outcome instead
+    /// of swallowing failures. Trash mode can fail on some mounts (e.g.
+    /// network drives without a trash directory); those files are reported,
+    /// not deleted. Directories are refused in every mode unless their
+    /// subtree contains no files (empty-subfolder scaffolding is removed with
+    /// them) — this operation backs the cleanup UI and must never take real
+    /// data along with a "empty" folder that gained content after the scan.
     pub fn delete_files_with_mode(&self, paths: &[PathBuf], mode: DeleteMode) -> Vec<DeleteResult> {
         paths
             .iter()
             .map(|path| {
-                let outcome = match mode {
-                    DeleteMode::Trash => trash::delete(path).map_err(|e| e.to_string()),
-                    DeleteMode::Permanent => fs::remove_file(path).map_err(|e| e.to_string()),
-                };
+                let outcome = self.delete_path_with_mode(path, mode);
                 match outcome {
                     Ok(()) => DeleteResult {
                         path: path.to_string_lossy().to_string(),
@@ -71,6 +72,26 @@ impl FileOperations {
                 }
             })
             .collect()
+    }
+
+    fn delete_path_with_mode(
+        &self,
+        path: &Path,
+        mode: DeleteMode,
+    ) -> std::result::Result<(), String> {
+        let is_dir = path.is_dir();
+        if is_dir {
+            match self.count_files(path) {
+                Ok(0) => {}
+                Ok(n) => return Err(format!("Directory is not empty ({} file(s) inside)", n)),
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+        match mode {
+            DeleteMode::Trash => trash::delete(path).map_err(|e| e.to_string()),
+            DeleteMode::Permanent if is_dir => fs::remove_dir_all(path).map_err(|e| e.to_string()),
+            DeleteMode::Permanent => fs::remove_file(path).map_err(|e| e.to_string()),
+        }
     }
 
     /// Move a file
@@ -201,6 +222,38 @@ mod tests {
         // The failure is reported with its reason, not swallowed
         assert!(!results[1].success);
         assert!(results[1].error.is_some());
+    }
+
+    #[test]
+    fn test_delete_empty_directory_permanently() {
+        let dir = tempdir().unwrap();
+        // Empty-subfolder scaffolding is removed together with the target
+        let target = dir.path().join("hollow");
+        fs::create_dir_all(target.join("nested/deeper")).unwrap();
+
+        let ops = FileOperations::new();
+        let results =
+            ops.delete_files_with_mode(std::slice::from_ref(&target), DeleteMode::Permanent);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].success, "error: {:?}", results[0].error);
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn test_delete_refuses_non_empty_directory_in_both_modes() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("occupied");
+        fs::create_dir_all(target.join("nested")).unwrap();
+        fs::write(target.join("nested/precious.txt"), "data").unwrap();
+
+        let ops = FileOperations::new();
+        for mode in [DeleteMode::Permanent, DeleteMode::Trash] {
+            let results = ops.delete_files_with_mode(std::slice::from_ref(&target), mode);
+            assert!(!results[0].success, "non-empty dir must be refused");
+            assert!(results[0].error.as_deref().unwrap().contains("not empty"));
+            assert!(target.join("nested/precious.txt").exists());
+        }
     }
 
     #[test]

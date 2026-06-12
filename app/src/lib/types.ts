@@ -43,6 +43,15 @@ export interface SimilarGroup {
 }
 
 /**
+ * Empty files and folders found in a scan. Files are 0 bytes; folders
+ * contain no files anywhere beneath them and are reported topmost-only.
+ */
+export interface EmptyScanResult {
+  empty_files: string[];
+  empty_folders: string[];
+}
+
+/**
  * Storage statistics
  */
 export interface StorageStats {

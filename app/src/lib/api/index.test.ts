@@ -3,7 +3,7 @@ import {
   scanDirectory,
   findDuplicates,
   findSimilarImages,
-  findEmptyFiles,
+  findEmptyItems,
   deleteFiles,
   getStorageStats,
   getCompressionPlugins,
@@ -57,10 +57,31 @@ describe('API Layer', () => {
       }
     });
 
-    it('findEmptyFiles returns mock data in web mode', async () => {
-      const result = await findEmptyFiles(['/test/path']);
-      
-      expect(result).toBeInstanceOf(Array);
+    it('findEmptyItems returns empty files and folders in web mode', async () => {
+      const result = await findEmptyItems(['/test/path']);
+
+      expect(result.empty_files.length).toBeGreaterThan(0);
+      expect(result.empty_folders.length).toBeGreaterThan(0);
+      expect(result.empty_files.every(p => typeof p === 'string')).toBe(true);
+      expect(result.empty_folders.every(p => typeof p === 'string')).toBe(true);
+    });
+
+    it('findEmptyItems mock includes items that demo every delete failure mode', async () => {
+      const result = await findEmptyItems(['/test/path']);
+
+      // "locked" items fail deletion with a permission error
+      expect(result.empty_files.some(p => p.includes('locked'))).toBe(true);
+      expect(result.empty_folders.some(p => p.includes('locked'))).toBe(true);
+      // "usb-drive" items fail trash-mode deletion, succeed permanently
+      expect(result.empty_folders.some(p => p.includes('usb-drive'))).toBe(true);
+    });
+
+    it('findEmptyItems merges results across multiple paths', async () => {
+      const single = await findEmptyItems(['/a']);
+      const merged = await findEmptyItems(['/a', '/b']);
+
+      expect(merged.empty_files.length).toBe(single.empty_files.length * 2);
+      expect(merged.empty_folders.length).toBe(single.empty_folders.length * 2);
     });
 
     it('getStorageStats returns mock data in web mode', async () => {
@@ -209,7 +230,7 @@ describe('API Layer', () => {
         scanDirectory('/data/empty-dir'),
         findDuplicates(['/data/empty-dir']),
         findSimilarImages(['/data/empty-dir'], 0.5),
-        findEmptyFiles(['/data/empty-dir']),
+        findEmptyItems(['/data/empty-dir']),
         getStorageStats(['/data/empty-dir']),
         scanCompressibleFiles(['/data/empty-dir'], ['WebP Converter']),
       ]);
@@ -218,7 +239,7 @@ describe('API Layer', () => {
       expect(scan.files).toEqual([]);
       expect(duplicates).toEqual([]);
       expect(similar).toEqual([]);
-      expect(empty).toEqual([]);
+      expect(empty).toEqual({ empty_files: [], empty_folders: [] });
       expect(stats.total_files).toBe(0);
       expect(stats.total_size).toBe(0);
       expect(compressible).toEqual({ compressible: [], rejected: [] });

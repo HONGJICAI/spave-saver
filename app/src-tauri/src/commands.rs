@@ -6,7 +6,7 @@ use once_cell::sync::Lazy;
 use space_saver_core::hash_cache::HashCache;
 use space_saver_core::skip_cache::{FileFingerprint, SkipCache};
 use space_saver_service::api::{
-    DuplicateGroup, FilterConfig, ScanResult, SimilarGroup, StorageStats,
+    DuplicateGroup, EmptyScanResult, FilterConfig, ScanResult, SimilarGroup, StorageStats,
 };
 use space_saver_service::ServiceApi;
 use space_saver_service::{DeleteMode, DeleteResult, FileOperations};
@@ -110,39 +110,20 @@ pub async fn similar_file_check(
         .map_err(|e| e.to_string())
 }
 
-/// Check for empty folders and files across multiple paths
+/// Find empty files (0 bytes) and empty folders (no files anywhere beneath
+/// them, reported topmost-only) across multiple paths. `filter` applies to
+/// files only.
 #[tauri::command]
 pub async fn empty_folder_check(
     paths: Vec<String>,
     filter: Option<FilterConfig>,
-) -> Result<Vec<String>, String> {
-    use space_saver_core::{scanner::DefaultFileScanner, FileScanner};
+) -> Result<EmptyScanResult, String> {
+    let api = ServiceApi::new();
+    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
 
-    let scanner = DefaultFileScanner::new();
-    let mut all_files = Vec::new();
-
-    // Collect files from all paths
-    for path_str in paths {
-        let path = PathBuf::from(path_str);
-        let mut files = scanner.scan(&path).map_err(|e| e.to_string())?;
-
-        // Apply filters if provided
-        if let Some(ref filter_config) = filter {
-            files = filter_config.apply(files);
-        }
-
-        all_files.extend(files);
-    }
-
-    // Filter for empty files
-    let empty_files: Vec<_> = all_files.into_iter().filter(|f| f.size == 0).collect();
-
-    let result_paths: Vec<String> = empty_files
-        .into_iter()
-        .map(|f| f.path.to_string_lossy().to_string())
-        .collect();
-
-    Ok(result_paths)
+    api.find_empty_in_paths(paths, filter)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Delete files, reporting a per-file outcome. `mode` defaults to "trash"
@@ -763,6 +744,66 @@ mod tests {
             !cache.is_known_skip(&path_str, &fp, "Some Old Plugin", None),
             "entries for a compressed path must be invalidated"
         );
+    }
+
+    #[tokio::test]
+    async fn empty_check_finds_files_and_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("zero.txt"), b"").unwrap();
+        fs::write(dir.path().join("full.txt"), b"content").unwrap();
+        fs::create_dir_all(dir.path().join("hollow/nested")).unwrap();
+
+        let result = empty_folder_check(paths_of(&dir), None).await.unwrap();
+
+        assert_eq!(
+            result.empty_files,
+            vec![dir.path().join("zero.txt").to_string_lossy().to_string()]
+        );
+        // Only the topmost empty folder is reported
+        assert_eq!(
+            result.empty_folders,
+            vec![dir.path().join("hollow").to_string_lossy().to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_check_errors_on_nonexistent_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope").to_string_lossy().to_string();
+        assert!(empty_folder_check(vec![missing], None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn empty_check_with_no_paths_returns_empty_result() {
+        let result = empty_folder_check(vec![], None).await.unwrap();
+        assert!(result.empty_files.is_empty());
+        assert!(result.empty_folders.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_files_removes_empty_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let hollow = dir.path().join("hollow");
+        fs::create_dir(&hollow).unwrap();
+        let occupied = dir.path().join("occupied");
+        fs::create_dir(&occupied).unwrap();
+        fs::write(occupied.join("file.txt"), b"data").unwrap();
+
+        let results = delete_files(
+            vec![
+                hollow.to_string_lossy().to_string(),
+                occupied.to_string_lossy().to_string(),
+            ],
+            Some(space_saver_service::DeleteMode::Permanent),
+        )
+        .await
+        .unwrap();
+
+        assert!(results[0].success);
+        assert!(!hollow.exists());
+        // A folder that gained content after the scan must be refused
+        assert!(!results[1].success);
+        assert!(occupied.join("file.txt").exists());
     }
 
     #[tokio::test]

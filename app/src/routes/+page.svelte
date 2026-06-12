@@ -34,8 +34,8 @@
       color: 'bg-green-500 hover:bg-green-600'
     },
     {
-      name: 'Empty Files',
-      description: 'Find and clean up empty files',
+      name: 'Empty Files & Folders',
+      description: 'Find and clean up empty files and folders',
       path: '/empty',
       icon: '📄',
       color: 'bg-yellow-500 hover:bg-yellow-600'
