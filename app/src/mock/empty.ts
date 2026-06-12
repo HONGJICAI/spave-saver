@@ -1,5 +1,11 @@
-// Mock empty files
+// Mock empty files. Paths containing "empty-dir" return no results, like
+// the backend scanning an empty or nonexistent directory.
 export function mockEmptyFiles(path: string): Promise<string[]> {
+  if (path.includes('empty-dir')) {
+    return new Promise((resolve) => {
+      setTimeout(() => resolve([]), 100);
+    });
+  }
   return new Promise((resolve) => {
     setTimeout(() => {
       resolve([

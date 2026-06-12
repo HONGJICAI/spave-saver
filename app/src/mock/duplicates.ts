@@ -4,8 +4,14 @@ import type { DuplicateGroup } from '$lib/types';
 const now = Math.floor(Date.now() / 1000);
 const DAY = 86400;
 
-// Mock duplicate files
+// Mock duplicate files. Paths containing "empty-dir" return no groups, like
+// the backend scanning an empty or nonexistent directory.
 export function mockFindDuplicates(path: string): Promise<DuplicateGroup[]> {
+  if (path.includes('empty-dir')) {
+    return new Promise((resolve) => {
+      setTimeout(() => resolve([]), 100);
+    });
+  }
   return new Promise((resolve) => {
     setTimeout(() => {
       resolve([

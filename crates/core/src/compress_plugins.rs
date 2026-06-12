@@ -223,10 +223,7 @@ impl PluginManager {
                     }
                 }
                 selected.ok_or_else(|| {
-                    anyhow!(
-                        "No active plugin can handle file: {}",
-                        source.display()
-                    )
+                    anyhow!("No active plugin can handle file: {}", source.display())
                 })?
             }
             None => self.find_plugin(source)?.ok_or_else(|| {
@@ -627,7 +624,9 @@ mod tests {
         let mut manager = PluginManager::new();
         manager.register(Box::new(MockPlugin::new("Plugin1", &["txt"])));
 
-        let outcome = manager.process_file(&source, dir.path(), None, true).unwrap();
+        let outcome = manager
+            .process_file(&source, dir.path(), None, true)
+            .unwrap();
         match outcome {
             CompressionOutcome::Compressed(result) => {
                 let backup = result.backup_path.expect("backup path must be set");
@@ -651,7 +650,9 @@ mod tests {
         let mut manager = PluginManager::new();
         manager.register(Box::new(plugin));
 
-        let outcome = manager.process_file(&source, dir.path(), None, true).unwrap();
+        let outcome = manager
+            .process_file(&source, dir.path(), None, true)
+            .unwrap();
         match outcome {
             CompressionOutcome::Skipped { plugin_name, .. } => {
                 assert_eq!(plugin_name, "Plugin1");
@@ -676,7 +677,9 @@ mod tests {
         let mut manager = PluginManager::new();
         manager.register(Box::new(plugin));
 
-        let outcome = manager.process_file(&source, dir.path(), None, true).unwrap();
+        let outcome = manager
+            .process_file(&source, dir.path(), None, true)
+            .unwrap();
         match outcome {
             CompressionOutcome::Compressed(result) => {
                 assert_eq!(result.output_path, source);
@@ -697,7 +700,9 @@ mod tests {
         let mut manager = PluginManager::new();
         manager.register(Box::new(MockPlugin::new("Plugin1", &["txt"])));
 
-        let outcome = manager.process_file(&source, dir.path(), None, true).unwrap();
+        let outcome = manager
+            .process_file(&source, dir.path(), None, true)
+            .unwrap();
         match outcome {
             CompressionOutcome::Compressed(result) => {
                 let backup = result.backup_path.unwrap();
@@ -719,7 +724,9 @@ mod tests {
         let mut manager = PluginManager::new();
         manager.register(Box::new(MockPlugin::new("Plugin1", &["txt"])));
 
-        let outcome = manager.process_file(&source, dir.path(), None, false).unwrap();
+        let outcome = manager
+            .process_file(&source, dir.path(), None, false)
+            .unwrap();
         match outcome {
             CompressionOutcome::Compressed(result) => {
                 assert!(result.backup_path.is_none(), "no backup path when disabled");
@@ -746,7 +753,9 @@ mod tests {
         manager.register(Box::new(plugin));
 
         // Even with backups disabled, a skip must never touch the original
-        let outcome = manager.process_file(&source, dir.path(), None, false).unwrap();
+        let outcome = manager
+            .process_file(&source, dir.path(), None, false)
+            .unwrap();
         assert!(matches!(outcome, CompressionOutcome::Skipped { .. }));
         assert_eq!(fs::read(&source).unwrap(), b"x");
     }
@@ -762,7 +771,9 @@ mod tests {
         let mut manager = PluginManager::new();
         manager.register(Box::new(plugin));
 
-        let outcome = manager.process_file(&source, dir.path(), None, false).unwrap();
+        let outcome = manager
+            .process_file(&source, dir.path(), None, false)
+            .unwrap();
         match outcome {
             CompressionOutcome::Compressed(result) => {
                 assert_eq!(result.output_path, source);
@@ -784,7 +795,10 @@ mod tests {
 
         // Without plugin_orders, should use first registered plugin
         let source = temp_source(dir.path(), "a.txt", b"original content");
-        match manager.process_file(&source, dir.path(), None, true).unwrap() {
+        match manager
+            .process_file(&source, dir.path(), None, true)
+            .unwrap()
+        {
             CompressionOutcome::Compressed(result) => assert_eq!(result.plugin_name, "Plugin1"),
             other => panic!("expected Compressed, got {:?}", other),
         }

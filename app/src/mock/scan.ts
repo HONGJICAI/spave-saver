@@ -1,7 +1,13 @@
 import type { ScanResult } from '$lib/types';
 
-// Mock scan result
+// Mock scan result. Paths containing "empty-dir" return no files, like the
+// backend scanning an empty or nonexistent directory (demos the empty-state UI).
 export function mockScanResult(path: string): Promise<ScanResult> {
+  if (path.includes('empty-dir')) {
+    return new Promise((resolve) => {
+      setTimeout(() => resolve({ path, file_count: 0, total_size: 0, files: [] }), 100);
+    });
+  }
   return new Promise((resolve) => {
     setTimeout(() => {
       resolve({

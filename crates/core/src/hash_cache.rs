@@ -80,10 +80,9 @@ impl HashCache {
     }
 
     pub fn insert(&mut self, path: &str, fingerprint: FileFingerprint, hash: String) {
-        self.data.entries.insert(
-            path.to_string(),
-            HashEntry { fingerprint, hash },
-        );
+        self.data
+            .entries
+            .insert(path.to_string(), HashEntry { fingerprint, hash });
         self.dirty = true;
     }
 

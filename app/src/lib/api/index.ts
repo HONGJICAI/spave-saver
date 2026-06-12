@@ -11,6 +11,8 @@ import { mockFindDuplicates } from "../../mock/duplicates";
 import { mockFindSimilar } from "../../mock/similar";
 import { mockEmptyFiles } from "../../mock/empty";
 import { mockStorageStats } from "../../mock/stats";
+import { mockPlugins, isKnownPlugin } from "../../mock/plugins";
+import { mockSkipCache } from "../../mock/skipCache";
 
 // Check if running in Tauri environment
 const isTauri = "__TAURI_INTERNALS__" in window;
@@ -275,27 +277,8 @@ export async function getCompressionPlugins(): Promise<CompressionPlugin[]> {
   if (isTauri) {
     return await invoke<CompressionPlugin[]>("get_compression_plugins");
   } else {
-    // Mock plugins
-    return [
-      {
-        name: "Image ZIP to WebP ZIP",
-        description: "Converts images inside ZIP archives to WebP format",
-        version: "1.0.0",
-        quality: 85
-      },
-      {
-        name: "WebP Converter",
-        description: "Converts PNG, JPEG, and other image formats to WebP",
-        version: "1.0.0",
-        quality: 85
-      },
-      {
-        name: "Animated WebP Converter",
-        description: "Convert GIF to Animated WebP with lossy compression for better file size",
-        version: "1.0.0",
-        quality: 85
-      }
-    ];
+    // Copies, so UI-side mutation cannot leak into the shared mock list
+    return mockPlugins.map(p => ({ ...p }));
   }
 }
 
@@ -305,8 +288,15 @@ export async function getCompressionPlugins(): Promise<CompressionPlugin[]> {
 export async function setPluginQuality(pluginName: string, quality: number): Promise<void> {
   if (isTauri) {
     await invoke("set_plugin_quality", { pluginName, quality });
+  } else {
+    // Mirrors the backend: unknown plugin names fail (quality itself is
+    // clamped backend-side, never an error). Like a real invoke() failure,
+    // the rejection value is the backend's plain error string.
+    if (!isKnownPlugin(pluginName)) {
+      return Promise.reject(`Plugin not found: ${pluginName}`);
+    }
+    // Success is a no-op: mock plugins keep their displayed value in the UI
   }
-  // Web mode: no-op (mock plugins keep their displayed value in the UI)
 }
 
 /**
@@ -324,60 +314,96 @@ export async function scanCompressibleFiles(
       filter
     });
   } else {
+    // Mirrors the backend: unknown active plugin names abort the scan with
+    // the same plain-string error a real invoke() would reject with
+    for (const name of activePlugins) {
+      if (!isKnownPlugin(name)) {
+        return Promise.reject(`Active plugin not found: ${name}`);
+      }
+    }
+
+    // Paths containing "empty-dir" contribute nothing, like the backend
+    // scanning an empty or nonexistent directory
+    if (!paths.some(p => !p.includes("empty-dir"))) {
+      return { compressible: [], rejected: [] };
+    }
+
     // Mock scan results. "already-tiny" and "locked" are picked up by the
     // compressFilesInPlace mock to demo the skipped/failed states in web mode.
-    return {
-      compressible: [
-        {
-          path: "/path/to/image.png",
-          original_size: 1024000,
-          estimated_compressed_size: 716800,
-          estimated_savings: 307200,
-          plugin_name: "WebP Converter"
-        },
-        {
-          path: "/path/to/wallpaper.png",
-          original_size: 3145728,
-          estimated_compressed_size: 2202010,
-          estimated_savings: 943718,
-          plugin_name: "WebP Converter"
-        },
-        {
-          path: "/path/to/photos.zip",
-          original_size: 5120000,
-          estimated_compressed_size: 3686400,
-          estimated_savings: 1433600,
-          plugin_name: "Image ZIP to WebP ZIP"
-        },
-        {
-          path: "/path/to/already-tiny.png",
-          original_size: 98304,
-          estimated_compressed_size: 72744,
-          estimated_savings: 25560,
-          plugin_name: "WebP Converter"
-        },
-        {
-          path: "/path/to/locked.png",
-          original_size: 512000,
-          estimated_compressed_size: 358400,
-          estimated_savings: 153600,
-          plugin_name: "WebP Converter"
-        }
-      ],
-      rejected: [
-        {
-          path: "/path/to/document.pdf",
-          size: 2048000,
-          extension: "pdf",
+    const compressible: CompressibleFile[] = [
+      {
+        path: "/path/to/image.png",
+        original_size: 1024000,
+        estimated_compressed_size: 716800,
+        estimated_savings: 307200,
+        plugin_name: "WebP Converter"
+      },
+      {
+        path: "/path/to/wallpaper.png",
+        original_size: 3145728,
+        estimated_compressed_size: 2202010,
+        estimated_savings: 943718,
+        plugin_name: "WebP Converter"
+      },
+      {
+        path: "/path/to/photos.zip",
+        original_size: 5120000,
+        estimated_compressed_size: 3686400,
+        estimated_savings: 1433600,
+        plugin_name: "Image ZIP to WebP ZIP"
+      },
+      {
+        path: "/path/to/already-tiny.png",
+        original_size: 98304,
+        estimated_compressed_size: 72744,
+        estimated_savings: 25560,
+        plugin_name: "WebP Converter"
+      },
+      {
+        path: "/path/to/locked.png",
+        original_size: 512000,
+        estimated_compressed_size: 358400,
+        estimated_savings: 153600,
+        plugin_name: "WebP Converter"
+      }
+    ];
+    const rejected: RejectedFile[] = [
+      {
+        path: "/path/to/document.pdf",
+        size: 2048000,
+        extension: "pdf",
+        rejection_reasons: [
+          {
+            plugin_name: "WebP Converter",
+            reason: "File extension not supported"
+          }
+        ]
+      }
+    ];
+
+    // Files remembered as "no size reduction" (recorded by the
+    // compressFilesInPlace mock when a file skips) are excluded from
+    // compressible and surfaced as rejections, like the backend skip cache
+    const remaining: CompressibleFile[] = [];
+    for (const file of compressible) {
+      if (mockSkipCache.has(file.path)) {
+        rejected.push({
+          path: file.path,
+          size: file.original_size,
+          extension: file.path.split(".").pop() ?? "",
           rejection_reasons: [
             {
-              plugin_name: "WebP Converter",
-              reason: "File extension not supported"
+              plugin_name: file.plugin_name,
+              reason:
+                "Previously produced no size reduction at quality 85 (cached result; file unchanged)"
             }
           ]
-        }
-      ]
-    };
+        });
+      } else {
+        remaining.push(file);
+      }
+    }
+    return { compressible: remaining, rejected };
   }
 }
 
@@ -400,15 +426,27 @@ export async function compressFilesInPlace(
   } else {
     // Mock in-place compression. Status is derived from the file name so the
     // three-state UI (compressed / skipped / failed) can be previewed in web
-    // mode: "already-tiny" files skip, "locked" files fail, the rest compress.
+    // mode: "already-tiny" files skip (and are remembered by the mock skip
+    // cache, like the backend), "locked" files fail with a permission error,
+    // "missing" files fail with "File not found", the rest compress.
+    await new Promise(resolve => setTimeout(resolve, 200));
     return filePaths.map(path => {
       if (path.includes("already-tiny")) {
+        mockSkipCache.record(path);
         return {
           status: "skipped" as const,
           success: true,
           path,
           plugin_name: "WebP Converter",
           reason: "Compressed output (102400 bytes) is not smaller than the original (98304 bytes); original kept"
+        };
+      }
+      if (path.includes("missing")) {
+        return {
+          status: "failed" as const,
+          success: false,
+          path,
+          error: "File not found"
         };
       }
       if (path.includes("locked")) {
@@ -447,7 +485,7 @@ export async function getSkipCacheInfo(): Promise<SkipCacheInfo> {
   if (isTauri) {
     return await invoke<SkipCacheInfo>("get_skip_cache_info");
   } else {
-    return { entries: 2 };
+    return { entries: mockSkipCache.size() };
   }
 }
 
@@ -458,7 +496,7 @@ export async function clearSkipCache(): Promise<number> {
   if (isTauri) {
     return await invoke<number>("clear_skip_cache");
   } else {
-    return 2;
+    return mockSkipCache.clear();
   }
 }
 

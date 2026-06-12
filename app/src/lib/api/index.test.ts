@@ -21,9 +21,11 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 describe('API Layer', () => {
   describe('Web Mode', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
       // Ensure we're in web mode
       vi.stubGlobal('__TAURI_INTERNALS__', undefined);
+      // The mock skip cache is module state; reset it so tests stay independent
+      await clearSkipCache();
     });
 
     it('scanDirectory returns mock data in web mode', async () => {
@@ -168,6 +170,76 @@ describe('API Layer', () => {
 
       expect(paths.some(p => p.includes('already-tiny'))).toBe(true);
       expect(paths.some(p => p.includes('locked'))).toBe(true);
+    });
+
+    it('setPluginQuality rejects unknown plugins with the backend error string', async () => {
+      await expect(setPluginQuality('No Such Plugin', 50)).rejects.toBe(
+        'Plugin not found: No Such Plugin'
+      );
+    });
+
+    it('scanCompressibleFiles rejects unknown active plugins like the backend', async () => {
+      await expect(scanCompressibleFiles(['/test/path'], ['No Such Plugin'])).rejects.toBe(
+        'Active plugin not found: No Such Plugin'
+      );
+    });
+
+    it('compressFilesInPlace reports missing files as File not found', async () => {
+      const results = await compressFilesInPlace(['/photos/missing.png'], ['WebP Converter']);
+
+      expect(results[0].status).toBe('failed');
+      expect(results[0].success).toBe(false);
+      expect(results[0].error).toBe('File not found');
+    });
+
+    it('findSimilarImages honors the threshold like the backend', async () => {
+      const [all, some, none] = await Promise.all([
+        findSimilarImages(['/test/path'], 0),
+        findSimilarImages(['/test/path'], 0.93),
+        findSimilarImages(['/test/path'], 1),
+      ]);
+
+      expect(all).toHaveLength(2);
+      expect(some.map(g => g.similarity_score)).toEqual([0.95]);
+      expect(none).toEqual([]);
+    });
+
+    it('paths containing "empty-dir" return empty results across scan APIs', async () => {
+      const [scan, duplicates, similar, empty, stats, compressible] = await Promise.all([
+        scanDirectory('/data/empty-dir'),
+        findDuplicates(['/data/empty-dir']),
+        findSimilarImages(['/data/empty-dir'], 0.5),
+        findEmptyFiles(['/data/empty-dir']),
+        getStorageStats(['/data/empty-dir']),
+        scanCompressibleFiles(['/data/empty-dir'], ['WebP Converter']),
+      ]);
+
+      expect(scan.file_count).toBe(0);
+      expect(scan.files).toEqual([]);
+      expect(duplicates).toEqual([]);
+      expect(similar).toEqual([]);
+      expect(empty).toEqual([]);
+      expect(stats.total_files).toBe(0);
+      expect(stats.total_size).toBe(0);
+      expect(compressible).toEqual({ compressible: [], rejected: [] });
+    });
+
+    it('skipped compressions are remembered and excluded from the next scan until cleared', async () => {
+      // A file whose compression produced no size reduction is remembered...
+      await compressFilesInPlace(['/path/to/already-tiny.png'], ['WebP Converter']);
+      expect((await getSkipCacheInfo()).entries).toBe(1);
+
+      // ...the next scan rejects it with the backend's cached-result reason...
+      const scan = await scanCompressibleFiles(['/test/path'], ['WebP Converter']);
+      expect(scan.compressible.some(f => f.path.includes('already-tiny'))).toBe(false);
+      const cached = scan.rejected.find(f => f.path.includes('already-tiny'));
+      expect(cached?.rejection_reasons[0].reason).toContain('cached result');
+
+      // ...and clearing the cache makes it compressible again
+      expect(await clearSkipCache()).toBe(1);
+      expect((await getSkipCacheInfo()).entries).toBe(0);
+      const rescan = await scanCompressibleFiles(['/test/path'], ['WebP Converter']);
+      expect(rescan.compressible.some(f => f.path.includes('already-tiny'))).toBe(true);
     });
   });
 
