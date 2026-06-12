@@ -23,6 +23,7 @@
     active: string[];
     poolSize: number;
     quality: Record<string, number>;
+    backup?: boolean;
   }
 
   let availablePlugins = $state<CompressionPlugin[]>([]);
@@ -36,6 +37,7 @@
 
   // Worker pool configuration
   let poolSize = $state(2);
+  let createBackup = $state(true);
   let processedCount = $state(0);
   let totalToProcess = $state(0);
   let currentlyProcessing = $state<string[]>([]);
@@ -60,6 +62,7 @@
         );
         activePlugins = new Set(plugins.filter(p => saved.active.includes(p.name)).map(p => p.name));
         poolSize = saved.poolSize ?? 2;
+        createBackup = saved.backup ?? true;
         for (const plugin of plugins) {
           const quality = saved.quality?.[plugin.name];
           if (quality != null && plugin.quality != null && quality !== plugin.quality) {
@@ -87,6 +90,7 @@
       quality: Object.fromEntries(
         availablePlugins.filter(p => p.quality != null).map(p => [p.name, p.quality!])
       ),
+      backup: createBackup,
     });
   }
 
@@ -138,6 +142,11 @@
 
   function handlePoolSizeChange(size: number) {
     poolSize = size;
+    persistSettings();
+  }
+
+  function handleCreateBackupChange(value: boolean) {
+    createBackup = value;
     persistSettings();
   }
 
@@ -219,7 +228,7 @@
           currentlyProcessing = [...currentlyProcessing, filePath];
 
           try {
-            const results = await compressFilesInPlace([filePath], plugins);
+            const results = await compressFilesInPlace([filePath], plugins, createBackup);
             compressionResults = [...compressionResults, ...results];
           } catch (err) {
             console.error(`Failed to compress ${filePath}:`, err);
@@ -329,6 +338,7 @@
         {compressibleFiles}
         {selectedFiles}
         {poolSize}
+        {createBackup}
         {compressing}
         {processedCount}
         {totalToProcess}
@@ -340,6 +350,7 @@
         onBack={() => currentStep = 'scan'}
         onCompress={handleCompress}
         onPoolSizeChange={handlePoolSizeChange}
+        onCreateBackupChange={handleCreateBackupChange}
       />
     </div>
   {/if}

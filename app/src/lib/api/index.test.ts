@@ -131,6 +131,13 @@ describe('API Layer', () => {
       expect(failed.error).toBeTruthy();
     });
 
+    it('compressFilesInPlace omits backup_path when backups are disabled', async () => {
+      const results = await compressFilesInPlace(['/photos/a.png'], ['WebP Converter'], false);
+
+      expect(results[0].status).toBe('compressed');
+      expect(results[0].backup_path).toBeUndefined();
+    });
+
     it('scanCompressibleFiles mock includes files that will skip and fail', async () => {
       const result = await scanCompressibleFiles(['/test/path'], ['WebP Converter']);
       const paths = result.compressible.map(f => f.path);

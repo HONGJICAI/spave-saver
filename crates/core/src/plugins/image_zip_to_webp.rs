@@ -387,7 +387,7 @@ mod tests {
         let mut manager = PluginManager::new();
         manager.register(Box::new(ImageZipToWebpZipPlugin::new()));
 
-        let outcome = manager.process_file(&source, dir.path(), None).unwrap();
+        let outcome = manager.process_file(&source, dir.path(), None, true).unwrap();
         match outcome {
             CompressionOutcome::Compressed(result) => {
                 // The converted ZIP takes over the original path (replace_source)

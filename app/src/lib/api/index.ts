@@ -342,16 +342,20 @@ export async function scanCompressibleFiles(
 }
 
 /**
- * Compress files in place (backup original, replace with compressed)
+ * Compress files in place. With createBackup the original is kept as
+ * <name>.bak; without it the original is deleted once compression fully
+ * succeeds (failures and skips never touch it).
  */
 export async function compressFilesInPlace(
   filePaths: string[],
-  pluginOrders: string[]
+  pluginOrders: string[],
+  createBackup: boolean = true
 ): Promise<InPlaceCompressionResult[]> {
   if (isTauri) {
     return await invoke<InPlaceCompressionResult[]>("compress_files_in_place", {
       filePaths,
-      pluginOrders
+      pluginOrders,
+      createBackup
     });
   } else {
     // Mock in-place compression. Status is derived from the file name so the
@@ -379,7 +383,7 @@ export async function compressFilesInPlace(
         status: "compressed" as const,
         success: true,
         path,
-        backup_path: `${path}.bak`,
+        ...(createBackup ? { backup_path: `${path}.bak` } : {}),
         original_size: 1024000,
         compressed_size: 716800,
         savings: 307200,

@@ -423,7 +423,7 @@ mod tests {
         let mut manager = PluginManager::new();
         manager.register(Box::new(WebPConverterPlugin::new()));
 
-        let outcome = manager.process_file(&source, dir.path(), None).unwrap();
+        let outcome = manager.process_file(&source, dir.path(), None, true).unwrap();
         match outcome {
             CompressionOutcome::Compressed(result) => {
                 assert!(!source.exists(), "original renamed to backup");

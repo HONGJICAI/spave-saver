@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
+use tracing::warn;
 
 /// Result of a compression operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,11 +195,16 @@ impl PluginManager {
     /// If `plugin_orders` is provided, ONLY those plugins are considered, in
     /// that order. If none of them can handle the file, an error is returned
     /// (a plugin the caller did not list is never used).
+    ///
+    /// When `keep_backup` is false, the original is still renamed aside during
+    /// processing (so a failure can never lose it), but it is deleted once the
+    /// compression has fully succeeded and `backup_path` will be None.
     pub fn process_file(
         &self,
         source: &Path,
         output_dir: &Path,
         plugin_orders: Option<&[String]>,
+        keep_backup: bool,
     ) -> Result<CompressionOutcome> {
         let plugin = match plugin_orders {
             Some(orders) => {
@@ -228,7 +234,7 @@ impl PluginManager {
             })?,
         };
 
-        self.execute_plugin(plugin, source, output_dir)
+        self.execute_plugin(plugin, source, output_dir, keep_backup)
     }
 
     /// Process a file with a specific plugin by name
@@ -237,6 +243,7 @@ impl PluginManager {
         source: &Path,
         output_dir: &Path,
         plugin_name: &str,
+        keep_backup: bool,
     ) -> Result<CompressionOutcome> {
         let plugin = self
             .plugins
@@ -255,7 +262,7 @@ impl PluginManager {
             ));
         }
 
-        self.execute_plugin(plugin.as_ref(), source, output_dir)
+        self.execute_plugin(plugin.as_ref(), source, output_dir, keep_backup)
     }
 
     /// Run a plugin and apply the shared backup / size-check / replace logic:
@@ -264,11 +271,14 @@ impl PluginManager {
     /// 3. Otherwise the original is renamed to `<name>.bak` (the backup), and
     ///    if the plugin requested `replace_source`, the output takes over the
     ///    original path.
+    /// 4. With `keep_backup` false, the backup is deleted only after every
+    ///    step above succeeded, so a failure can never lose the original.
     fn execute_plugin(
         &self,
         plugin: &dyn CompressionPlugin,
         source: &Path,
         output_dir: &Path,
+        keep_backup: bool,
     ) -> Result<CompressionOutcome> {
         let mut result = plugin.process(source, output_dir)?;
 
@@ -309,7 +319,23 @@ impl PluginManager {
             result.output_path = source.to_path_buf();
         }
 
-        result.backup_path = Some(backup_path);
+        if keep_backup {
+            result.backup_path = Some(backup_path);
+        } else {
+            // Compression fully succeeded; the user opted out of backups
+            match fs::remove_file(&backup_path) {
+                Ok(()) => result.backup_path = None,
+                Err(e) => {
+                    // Keep the backup rather than fail a successful compression
+                    warn!(
+                        backup = %backup_path.display(),
+                        error = %e,
+                        "Failed to remove backup after compression; keeping it"
+                    );
+                    result.backup_path = Some(backup_path);
+                }
+            }
+        }
         Ok(CompressionOutcome::Compressed(result))
     }
 
@@ -347,12 +373,13 @@ impl PluginManager {
         sources: &[PathBuf],
         output_dir: &Path,
         plugin_orders: Option<&[String]>,
+        keep_backup: bool,
     ) -> Result<Vec<Result<CompressionOutcome>>> {
         fs::create_dir_all(output_dir)?;
 
         let results: Vec<Result<CompressionOutcome>> = sources
             .iter()
-            .map(|source| self.process_file(source, output_dir, plugin_orders))
+            .map(|source| self.process_file(source, output_dir, plugin_orders, keep_backup))
             .collect();
 
         Ok(results)
@@ -581,7 +608,7 @@ mod tests {
         let mut manager = PluginManager::new();
         manager.register(Box::new(MockPlugin::new("Plugin1", &["txt"])));
 
-        let outcome = manager.process_file(&source, dir.path(), None).unwrap();
+        let outcome = manager.process_file(&source, dir.path(), None, true).unwrap();
         match outcome {
             CompressionOutcome::Compressed(result) => {
                 let backup = result.backup_path.expect("backup path must be set");
@@ -605,7 +632,7 @@ mod tests {
         let mut manager = PluginManager::new();
         manager.register(Box::new(plugin));
 
-        let outcome = manager.process_file(&source, dir.path(), None).unwrap();
+        let outcome = manager.process_file(&source, dir.path(), None, true).unwrap();
         match outcome {
             CompressionOutcome::Skipped { plugin_name, .. } => {
                 assert_eq!(plugin_name, "Plugin1");
@@ -630,7 +657,7 @@ mod tests {
         let mut manager = PluginManager::new();
         manager.register(Box::new(plugin));
 
-        let outcome = manager.process_file(&source, dir.path(), None).unwrap();
+        let outcome = manager.process_file(&source, dir.path(), None, true).unwrap();
         match outcome {
             CompressionOutcome::Compressed(result) => {
                 assert_eq!(result.output_path, source);
@@ -651,7 +678,7 @@ mod tests {
         let mut manager = PluginManager::new();
         manager.register(Box::new(MockPlugin::new("Plugin1", &["txt"])));
 
-        let outcome = manager.process_file(&source, dir.path(), None).unwrap();
+        let outcome = manager.process_file(&source, dir.path(), None, true).unwrap();
         match outcome {
             CompressionOutcome::Compressed(result) => {
                 let backup = result.backup_path.unwrap();
@@ -660,6 +687,69 @@ mod tests {
                     fs::read(dir.path().join("test.txt.bak")).unwrap(),
                     b"older backup"
                 );
+            }
+            other => panic!("expected Compressed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_process_without_backup_removes_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = temp_source(dir.path(), "test.txt", b"original content");
+
+        let mut manager = PluginManager::new();
+        manager.register(Box::new(MockPlugin::new("Plugin1", &["txt"])));
+
+        let outcome = manager.process_file(&source, dir.path(), None, false).unwrap();
+        match outcome {
+            CompressionOutcome::Compressed(result) => {
+                assert!(result.backup_path.is_none(), "no backup path when disabled");
+                assert!(!source.exists(), "original removed after success");
+                assert!(
+                    !dir.path().join("test.txt.bak").exists(),
+                    "no .bak file left behind"
+                );
+                assert!(result.output_path.exists());
+            }
+            other => panic!("expected Compressed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_process_without_backup_keeps_original_on_skip() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = temp_source(dir.path(), "small.txt", b"x");
+
+        let mut plugin = MockPlugin::new("Plugin1", &["txt"]);
+        plugin.output_content = b"way bigger than the original".to_vec();
+
+        let mut manager = PluginManager::new();
+        manager.register(Box::new(plugin));
+
+        // Even with backups disabled, a skip must never touch the original
+        let outcome = manager.process_file(&source, dir.path(), None, false).unwrap();
+        assert!(matches!(outcome, CompressionOutcome::Skipped { .. }));
+        assert_eq!(fs::read(&source).unwrap(), b"x");
+    }
+
+    #[test]
+    fn test_replace_source_without_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = temp_source(dir.path(), "archive.zip", b"original zip content");
+
+        let mut plugin = MockPlugin::new("ZipPlugin", &["zip"]);
+        plugin.replace_source = true;
+
+        let mut manager = PluginManager::new();
+        manager.register(Box::new(plugin));
+
+        let outcome = manager.process_file(&source, dir.path(), None, false).unwrap();
+        match outcome {
+            CompressionOutcome::Compressed(result) => {
+                assert_eq!(result.output_path, source);
+                assert_eq!(fs::read(&source).unwrap(), b"c");
+                assert!(result.backup_path.is_none());
+                assert!(!dir.path().join("archive.zip.bak").exists());
             }
             other => panic!("expected Compressed, got {:?}", other),
         }
@@ -675,7 +765,7 @@ mod tests {
 
         // Without plugin_orders, should use first registered plugin
         let source = temp_source(dir.path(), "a.txt", b"original content");
-        match manager.process_file(&source, dir.path(), None).unwrap() {
+        match manager.process_file(&source, dir.path(), None, true).unwrap() {
             CompressionOutcome::Compressed(result) => assert_eq!(result.plugin_name, "Plugin1"),
             other => panic!("expected Compressed, got {:?}", other),
         }
@@ -684,7 +774,7 @@ mod tests {
         let source = temp_source(dir.path(), "b.txt", b"original content");
         let orders = vec!["Plugin2".to_string()];
         match manager
-            .process_file(&source, dir.path(), Some(&orders))
+            .process_file(&source, dir.path(), Some(&orders), true)
             .unwrap()
         {
             CompressionOutcome::Compressed(result) => assert_eq!(result.plugin_name, "Plugin2"),
@@ -703,7 +793,7 @@ mod tests {
         // Plugin1 could handle the file, but it is not in the orders list,
         // so it must NOT be used (the user deactivated it)
         let orders = vec!["Nonexistent Plugin".to_string()];
-        let result = manager.process_file(&source, dir.path(), Some(&orders));
+        let result = manager.process_file(&source, dir.path(), Some(&orders), true);
         assert!(result.is_err());
         assert!(source.exists(), "source must be untouched");
     }

@@ -283,14 +283,16 @@ pub async fn scan_compressible_files(
     }))
 }
 
-/// Compress files in place. The manager renames the original to `<name>.bak`
-/// (the backup) and keeps the compressed output next to it. Each file ends up
-/// in one of three states: "compressed", "skipped" (output was not smaller,
-/// original kept untouched), or "failed".
+/// Compress files in place. With `create_backup` the original is kept as
+/// `<name>.bak` next to the output; without it the original is deleted once
+/// compression fully succeeds (failures and skips never touch it). Each file
+/// ends up in one of three states: "compressed", "skipped" (output was not
+/// smaller, original kept untouched), or "failed".
 #[tauri::command]
 pub async fn compress_files_in_place(
     file_paths: Vec<String>,
     plugin_orders: Vec<String>, // Ordered list of active plugin names
+    create_backup: bool,        // false: delete the original once compression succeeds
 ) -> Result<Vec<serde_json::Value>, String> {
     use space_saver_core::CompressionOutcome;
     use std::path::PathBuf;
@@ -325,7 +327,7 @@ pub async fn compress_files_in_place(
 
         // Only the plugins listed in plugin_orders are considered; the
         // manager performs the backup before replacing anything
-        match manager.process_file(&source, source_dir, orders) {
+        match manager.process_file(&source, source_dir, orders, create_backup) {
             Ok(CompressionOutcome::Compressed(compress_result)) => {
                 results.push(serde_json::json!({
                     "status": "compressed",
@@ -444,6 +446,7 @@ mod tests {
         let results = compress_files_in_place(
             vec![source.to_string_lossy().to_string()],
             vec!["WebP Converter".to_string()],
+            true,
         )
         .await
         .unwrap();
@@ -477,6 +480,7 @@ mod tests {
                 dir.path().join("missing.png").to_string_lossy().to_string(),
             ],
             vec!["Image ZIP to WebP ZIP".to_string()],
+            true,
         )
         .await
         .unwrap();
@@ -491,6 +495,31 @@ mod tests {
 
         assert_eq!(results[1]["status"], "failed");
         assert_eq!(results[1]["error"], "File not found");
+    }
+
+    #[tokio::test]
+    async fn compress_in_place_without_backup_leaves_no_bak_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("noise.png");
+        save_noise_png(&source, 128, 128);
+
+        let results = compress_files_in_place(
+            vec![source.to_string_lossy().to_string()],
+            vec!["WebP Converter".to_string()],
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["status"], "compressed");
+        assert!(results[0]["backup_path"].is_null());
+        assert!(!source.exists(), "original deleted after success");
+        assert!(
+            !dir.path().join("noise.png.bak").exists(),
+            "no .bak file when backups are disabled"
+        );
+        assert!(dir.path().join("noise.webp").exists());
     }
 
     #[tokio::test]
