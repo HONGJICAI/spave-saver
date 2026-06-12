@@ -82,9 +82,12 @@ mock 数据本身的要求：
 
 - **不只 mock 成功**：每种后端可能返回的状态（成功/失败/跳过/部分失败）都要能在 Web 模式触发。沿用现有的"路径关键字触发状态"惯例：
   - 路径含 `locked` → 权限失败
-  - 路径含 `already-tiny` → 压缩 skipped（产物不更小）
+  - 路径含 `already-tiny` → 压缩 skipped（产物不更小，并记入 web 模式的 skip cache）
   - 路径含 `usb-drive` → trash 模式失败、permanent 成功
+  - 路径含 `missing` → 压缩 failed（File not found）
+  - 路径含 `empty-dir` → 各扫描类接口返回空结果（演示空状态 UI）
   - 新增状态时按同样模式扩展，并在 mock 代码注释里说明触发词
+- 有状态的后端行为 mock 也要有状态：如 skip cache（`app/src/mock/skipCache.ts`）在 web 模式是真实的内存状态——压缩 skipped 会记录条目、下次扫描以 cached result 理由排除该文件、清除后恢复，完整复刻后端闭环
 - mock 的错误信息措辞要贴近后端真实返回（如 `Permission denied (os error 13)`），保证 UI 错误展示路径被真实地测到
 - 异步操作的 mock 用 `setTimeout` 加少量延迟，让 loading 状态可见
 - API 层每个函数在 `app/src/lib/api/index.test.ts` 都要有测试
