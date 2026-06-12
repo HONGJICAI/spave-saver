@@ -57,13 +57,25 @@ impl FilterConfig {
 /// Service API for external interfaces (Tauri, CLI, etc.)
 pub struct ServiceApi {
     scanner: DefaultFileScanner,
+    /// Optional content-hash cache shared by duplicate scans; unchanged
+    /// files (same size+mtime) are not re-read
+    hash_cache: Option<std::sync::Arc<std::sync::RwLock<space_saver_core::HashCache>>>,
 }
 
 impl ServiceApi {
     pub fn new() -> Self {
         Self {
             scanner: DefaultFileScanner::new(),
+            hash_cache: None,
         }
+    }
+
+    pub fn with_hash_cache(
+        mut self,
+        cache: std::sync::Arc<std::sync::RwLock<space_saver_core::HashCache>>,
+    ) -> Self {
+        self.hash_cache = Some(cache);
+        self
     }
 
     /// Scan multiple directories (primary method)
@@ -131,29 +143,64 @@ impl ServiceApi {
             all_files.extend(files);
         }
 
-        // Step 1: Group files by size first
+        // Step 1: Group files by size first. Empty files are excluded: they
+        // are all trivially identical and belong to the Empty Files feature.
         let mut size_map: HashMap<u64, Vec<FileInfo>> = HashMap::new();
         for file in all_files {
+            if file.size == 0 {
+                continue;
+            }
             size_map.entry(file.size).or_default().push(file);
         }
 
-        // Step 2: Only calculate hashes for files with the same size (potential duplicates)
+        // Step 2: Hash only files that share a size (potential duplicates),
+        // in parallel, consulting the hash cache for unchanged files
+        use rayon::prelude::*;
+        use space_saver_core::skip_cache::FileFingerprint;
+
+        let candidates: Vec<FileInfo> = size_map
+            .into_values()
+            .filter(|files| files.len() > 1)
+            .flatten()
+            .collect();
+
+        // `fresh` carries the cache key for newly computed hashes; they are
+        // inserted after the parallel section so workers never contend on the
+        // cache's write lock
         let hasher = FileHasher::new_blake3();
-        let mut hash_map: HashMap<String, Vec<FileInfo>> = HashMap::new();
+        let hashed: Vec<(String, FileInfo, Option<(String, FileFingerprint)>)> = candidates
+            .into_par_iter()
+            .filter_map(|file| {
+                let path_str = file.path.to_string_lossy().to_string();
+                let fingerprint = FileFingerprint {
+                    size: file.size,
+                    mtime: file.modified,
+                };
 
-        for (_, files) in size_map {
-            // Skip if only one file with this size
-            if files.len() == 1 {
-                continue;
-            }
-
-            // Calculate hashes only for files that might be duplicates
-            for file in files {
-                if let Ok(hash) = hasher.hash_file(&file.path) {
-                    hash_map.entry(hash).or_default().push(file);
+                if let Some(cache) = &self.hash_cache {
+                    if let Ok(cache) = cache.read() {
+                        if let Some(hash) = cache.get(&path_str, &fingerprint) {
+                            return Some((hash.to_string(), file, None));
+                        }
+                    }
                 }
+
+                // Unreadable files are dropped from the result; they cannot
+                // be safely treated as duplicates of anything
+                let hash = hasher.hash_file(&file.path).ok()?;
+                Some((hash, file, Some((path_str, fingerprint))))
+            })
+            .collect();
+
+        let mut cache_guard = self.hash_cache.as_ref().and_then(|c| c.write().ok());
+        let mut hash_map: HashMap<String, Vec<FileInfo>> = HashMap::new();
+        for (hash, file, fresh) in hashed {
+            if let (Some(cache), Some((path_str, fingerprint))) = (cache_guard.as_mut(), fresh) {
+                cache.insert(&path_str, fingerprint, hash.clone());
             }
+            hash_map.entry(hash).or_default().push(file);
         }
+        drop(cache_guard);
 
         // Step 3: Build duplicate groups
         let duplicates: Vec<DuplicateGroup> = hash_map
@@ -362,6 +409,55 @@ mod tests {
     async fn test_service_api_creation() {
         let _api = ServiceApi::new();
         // Just ensure it can be created
+    }
+
+    #[tokio::test]
+    async fn test_find_duplicates_with_hash_cache() {
+        use space_saver_core::HashCache;
+        use std::sync::{Arc, RwLock};
+
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("a.bin"), b"same content").unwrap();
+        fs::write(dir.path().join("b.bin"), b"same content").unwrap();
+        fs::write(dir.path().join("c.bin"), b"different data").unwrap();
+
+        let cache = Arc::new(RwLock::new(HashCache::in_memory()));
+        let api = ServiceApi::new().with_hash_cache(Arc::clone(&cache));
+
+        let groups = api
+            .find_duplicates_in_paths(vec![dir.path().to_path_buf()], None)
+            .await
+            .unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].count, 2);
+
+        // Only a.bin and b.bin share a size, so exactly those were hashed
+        assert_eq!(cache.read().unwrap().len(), 2);
+
+        // Second scan hits the cache and yields the same result
+        let groups = api
+            .find_duplicates_in_paths(vec![dir.path().to_path_buf()], None)
+            .await
+            .unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_find_duplicates_excludes_empty_files() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("empty1.txt"), b"").unwrap();
+        fs::write(dir.path().join("empty2.txt"), b"").unwrap();
+
+        let api = ServiceApi::new();
+        let groups = api
+            .find_duplicates_in_paths(vec![dir.path().to_path_buf()], None)
+            .await
+            .unwrap();
+        assert!(
+            groups.is_empty(),
+            "empty files must not form a duplicate group"
+        );
     }
 
     #[tokio::test]

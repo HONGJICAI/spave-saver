@@ -70,8 +70,24 @@ describe('API Layer', () => {
       expect(result).toHaveProperty('images');
     });
 
-    it('deleteFiles resolves in web mode', async () => {
-      await expect(deleteFiles(['/file1.txt'])).resolves.toBe(1);
+    it('deleteFiles reports per-file results in web mode', async () => {
+      const results = await deleteFiles(['/file1.txt', '/locked/file2.txt']);
+
+      expect(results).toHaveLength(2);
+      expect(results[0]).toEqual({ path: '/file1.txt', success: true });
+      expect(results[1].success).toBe(false);
+      expect(results[1].error).toBeTruthy();
+    });
+
+    it('deleteFiles mock simulates a volume without a trash directory', async () => {
+      // Trash mode fails for the USB-drive file...
+      const trashed = await deleteFiles(['/usb-drive/video.mp4'], 'trash');
+      expect(trashed[0].success).toBe(false);
+      expect(trashed[0].error).toContain('no trash directory');
+
+      // ...and retrying with permanent deletion succeeds
+      const permanent = await deleteFiles(['/usb-drive/video.mp4'], 'permanent');
+      expect(permanent[0].success).toBe(true);
     });
 
     it('getCompressionPlugins returns all three plugins with quality in web mode', async () => {

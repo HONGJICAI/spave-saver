@@ -58,10 +58,16 @@
 
     deleteInProgress = true;
     try {
-      await deleteFiles(Array.from(selectedFiles));
-      emptyFiles = emptyFiles.filter(path => !selectedFiles.has(path));
+      // Defaults to the system trash; only successfully removed files leave the list
+      const results = await deleteFiles(Array.from(selectedFiles));
+      const deleted = new Set(results.filter(r => r.success).map(r => r.path));
+      const failed = results.filter(r => !r.success);
+      emptyFiles = emptyFiles.filter(path => !deleted.has(path));
       selectedFiles = new Set();
       showDeleteConfirm = false;
+      if (failed.length > 0) {
+        $appState.error = `Failed to delete ${failed.length} file(s): ${failed[0].error ?? 'unknown error'}`;
+      }
     } catch (err) {
       $appState.error = err instanceof Error ? err.message : 'Failed to delete files';
     } finally {

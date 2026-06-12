@@ -3,11 +3,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use once_cell::sync::Lazy;
+use space_saver_core::hash_cache::HashCache;
 use space_saver_core::skip_cache::{FileFingerprint, SkipCache};
 use space_saver_service::api::{
     DuplicateGroup, FilterConfig, ScanResult, SimilarGroup, StorageStats,
 };
-use space_saver_service::FileOperations;
+use space_saver_service::{DeleteMode, DeleteResult, FileOperations};
 use space_saver_service::ServiceApi;
 
 /// Remembers files a plugin already failed to shrink at a given quality so
@@ -31,6 +32,25 @@ fn skip_cache_path() -> PathBuf {
     std::env::temp_dir().join(format!("space-saver-test-skip-cache-{}.json", std::process::id()))
 }
 
+/// Content-hash cache for duplicate scans: unchanged files (same size+mtime)
+/// are not re-read on subsequent scans
+static HASH_CACHE: Lazy<Arc<RwLock<HashCache>>> = Lazy::new(|| {
+    let cache = HashCache::load(hash_cache_path());
+    Arc::new(RwLock::new(cache))
+});
+
+#[cfg(not(test))]
+fn hash_cache_path() -> PathBuf {
+    space_saver_utils::Config::load_or_default()
+        .cache_dir
+        .join("duplicate_hash_cache.json")
+}
+
+#[cfg(test)]
+fn hash_cache_path() -> PathBuf {
+    std::env::temp_dir().join(format!("space-saver-test-hash-cache-{}.json", std::process::id()))
+}
+
 /// Scan multiple directories
 #[tauri::command]
 pub async fn scan(
@@ -51,12 +71,22 @@ pub async fn duplicate_file_check(
     paths: Vec<String>,
     filter: Option<FilterConfig>,
 ) -> Result<Vec<DuplicateGroup>, String> {
-    let api = ServiceApi::new();
+    let api = ServiceApi::new().with_hash_cache(Arc::clone(&HASH_CACHE));
     let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
 
-    api.find_duplicates_in_paths(paths, filter)
+    let result = api
+        .find_duplicates_in_paths(paths, filter)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    // Persist newly computed hashes; cache failures must not fail the scan
+    if let Ok(mut cache) = HASH_CACHE.write() {
+        if let Err(e) = cache.save() {
+            tracing::warn!(error = %e, "Failed to persist duplicate hash cache");
+        }
+    }
+
+    Ok(result)
 }
 
 /// Find similar images across multiple paths
@@ -109,13 +139,18 @@ pub async fn empty_folder_check(
     Ok(result_paths)
 }
 
-/// Delete files
+/// Delete files, reporting a per-file outcome. `mode` defaults to "trash"
+/// (recoverable); "permanent" removes from disk immediately.
 #[tauri::command]
-pub async fn delete_files(paths: Vec<String>) -> Result<usize, String> {
+pub async fn delete_files(
+    paths: Vec<String>,
+    mode: Option<DeleteMode>,
+) -> Result<Vec<DeleteResult>, String> {
     let ops = FileOperations::new();
     let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    let mode = mode.unwrap_or(DeleteMode::Trash);
 
-    ops.delete_files(&paths).map_err(|e| e.to_string())
+    Ok(ops.delete_files_with_mode(&paths, mode))
 }
 
 /// Get storage statistics across multiple paths
@@ -722,6 +757,46 @@ mod tests {
             !cache.is_known_skip(&path_str, &fp, "Some Old Plugin", None),
             "entries for a compressed path must be invalidated"
         );
+    }
+
+    #[tokio::test]
+    async fn delete_files_reports_per_file_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("delete-me.txt");
+        std::fs::write(&existing, b"x").unwrap();
+        let missing = dir.path().join("not-there.txt");
+
+        let results = delete_files(
+            vec![
+                existing.to_string_lossy().to_string(),
+                missing.to_string_lossy().to_string(),
+            ],
+            Some(space_saver_service::DeleteMode::Permanent),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0].success);
+        assert!(!existing.exists());
+        assert!(!results[1].success, "missing file must be reported as failed");
+        assert!(results[1].error.is_some());
+    }
+
+    #[tokio::test]
+    async fn duplicate_check_finds_groups_and_populates_hash_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.bin"), b"identical bytes").unwrap();
+        std::fs::write(dir.path().join("b.bin"), b"identical bytes").unwrap();
+        std::fs::write(dir.path().join("unique.bin"), b"something else!!").unwrap();
+
+        let groups = duplicate_file_check(paths_of(&dir), None).await.unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].count, 2);
+
+        // Second scan resolves from the cache and agrees
+        let groups = duplicate_file_check(paths_of(&dir), None).await.unwrap();
+        assert_eq!(groups.len(), 1);
     }
 
     #[tokio::test]
