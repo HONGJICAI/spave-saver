@@ -128,6 +128,8 @@ export interface CompressionPlugin {
   name: string;
   description: string;
   version: string;
+  /** Quality setting (0-100), or null if the plugin has no quality knob */
+  quality?: number | null;
 }
 
 /**
@@ -203,9 +205,18 @@ export interface ScanCompressibleResult {
 }
 
 /**
+ * Status of an in-place compression:
+ * - compressed: original renamed to backup, smaller file written
+ * - skipped: output was not smaller, original kept untouched
+ * - failed: an error occurred, original kept untouched
+ */
+export type CompressionStatus = "compressed" | "skipped" | "failed";
+
+/**
  * In-place compression result
  */
 export interface InPlaceCompressionResult {
+  status: CompressionStatus;
   success: boolean;
   path: string;
   backup_path?: string;
@@ -213,6 +224,7 @@ export interface InPlaceCompressionResult {
   compressed_size?: number;
   savings?: number;
   plugin_name?: string;
+  reason?: string;
   error?: string;
 }
 
@@ -228,15 +240,33 @@ export async function getCompressionPlugins(): Promise<CompressionPlugin[]> {
       {
         name: "Image ZIP to WebP ZIP",
         description: "Converts images inside ZIP archives to WebP format",
-        version: "1.0.0"
+        version: "1.0.0",
+        quality: 85
       },
       {
         name: "WebP Converter",
         description: "Converts PNG, JPEG, and other image formats to WebP",
-        version: "1.0.0"
+        version: "1.0.0",
+        quality: 85
+      },
+      {
+        name: "Animated WebP Converter",
+        description: "Convert GIF to Animated WebP with lossy compression for better file size",
+        version: "1.0.0",
+        quality: 85
       }
     ];
   }
+}
+
+/**
+ * Set the quality (0-100) of a compression plugin
+ */
+export async function setPluginQuality(pluginName: string, quality: number): Promise<void> {
+  if (isTauri) {
+    await invoke("set_plugin_quality", { pluginName, quality });
+  }
+  // Web mode: no-op (mock plugins keep their displayed value in the UI)
 }
 
 /**
@@ -254,7 +284,8 @@ export async function scanCompressibleFiles(
       filter
     });
   } else {
-    // Mock scan results
+    // Mock scan results. "already-tiny" and "locked" are picked up by the
+    // compressFilesInPlace mock to demo the skipped/failed states in web mode.
     return {
       compressible: [
         {
@@ -265,11 +296,32 @@ export async function scanCompressibleFiles(
           plugin_name: "WebP Converter"
         },
         {
+          path: "/path/to/wallpaper.png",
+          original_size: 3145728,
+          estimated_compressed_size: 2202010,
+          estimated_savings: 943718,
+          plugin_name: "WebP Converter"
+        },
+        {
           path: "/path/to/photos.zip",
           original_size: 5120000,
           estimated_compressed_size: 3686400,
           estimated_savings: 1433600,
           plugin_name: "Image ZIP to WebP ZIP"
+        },
+        {
+          path: "/path/to/already-tiny.png",
+          original_size: 98304,
+          estimated_compressed_size: 72744,
+          estimated_savings: 25560,
+          plugin_name: "WebP Converter"
+        },
+        {
+          path: "/path/to/locked.png",
+          original_size: 512000,
+          estimated_compressed_size: 358400,
+          estimated_savings: 153600,
+          plugin_name: "WebP Converter"
         }
       ],
       rejected: [
@@ -290,28 +342,54 @@ export async function scanCompressibleFiles(
 }
 
 /**
- * Compress files in place (backup original, replace with compressed)
+ * Compress files in place. With createBackup the original is kept as
+ * <name>.bak; without it the original is deleted once compression fully
+ * succeeds (failures and skips never touch it).
  */
 export async function compressFilesInPlace(
   filePaths: string[],
-  pluginOrders: string[]
+  pluginOrders: string[],
+  createBackup: boolean = true
 ): Promise<InPlaceCompressionResult[]> {
   if (isTauri) {
     return await invoke<InPlaceCompressionResult[]>("compress_files_in_place", {
       filePaths,
-      pluginOrders
+      pluginOrders,
+      createBackup
     });
   } else {
-    // Mock in-place compression
-    return filePaths.map(path => ({
-      success: true,
-      path,
-      backup_path: `${path}.backup`,
-      original_size: 1024000,
-      compressed_size: 716800,
-      savings: 307200,
-      plugin_name: "WebP Converter"
-    }));
+    // Mock in-place compression. Status is derived from the file name so the
+    // three-state UI (compressed / skipped / failed) can be previewed in web
+    // mode: "already-tiny" files skip, "locked" files fail, the rest compress.
+    return filePaths.map(path => {
+      if (path.includes("already-tiny")) {
+        return {
+          status: "skipped" as const,
+          success: true,
+          path,
+          plugin_name: "WebP Converter",
+          reason: "Compressed output (102400 bytes) is not smaller than the original (98304 bytes); original kept"
+        };
+      }
+      if (path.includes("locked")) {
+        return {
+          status: "failed" as const,
+          success: false,
+          path,
+          error: "Failed to back up original file: Permission denied (os error 13)"
+        };
+      }
+      return {
+        status: "compressed" as const,
+        success: true,
+        path,
+        ...(createBackup ? { backup_path: `${path}.bak` } : {}),
+        original_size: 1024000,
+        compressed_size: 716800,
+        savings: 307200,
+        plugin_name: "WebP Converter"
+      };
+    });
   }
 }
 

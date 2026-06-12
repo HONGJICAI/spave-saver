@@ -38,3 +38,8 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 walkdir = { workspace = true }
 uuid = { version = "1.6", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3.8"
+image = { workspace = true }
+zip = { workspace = true }

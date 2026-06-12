@@ -7,32 +7,38 @@
     compressibleFiles: CompressibleFile[];
     selectedFiles: Set<string>;
     poolSize: number;
+    createBackup: boolean;
     compressing: boolean;
     processedCount: number;
     totalToProcess: number;
-    successCount: number;
-    errorCount: number;
+    compressedCount: number;
+    skippedCount: number;
+    failedCount: number;
     onToggleFile: (path: string) => void;
     onToggleAll: () => void;
     onBack: () => void;
     onCompress: () => void;
     onPoolSizeChange: (size: number) => void;
+    onCreateBackupChange: (value: boolean) => void;
   };
 
-  let { 
+  let {
     compressibleFiles,
     selectedFiles,
     poolSize,
+    createBackup,
     compressing,
     processedCount,
     totalToProcess,
-    successCount,
-    errorCount,
+    compressedCount,
+    skippedCount,
+    failedCount,
     onToggleFile,
     onToggleAll,
     onBack,
     onCompress,
-    onPoolSizeChange
+    onPoolSizeChange,
+    onCreateBackupChange
   }: Props = $props();
 
   let totalOriginalSize = $derived(
@@ -104,6 +110,33 @@
     </p>
   </div>
 
+  <!-- Backup Toggle -->
+  <div class="mb-6 p-4 bg-white border border-gray-200 rounded">
+    <label class="flex items-start gap-3 cursor-pointer">
+      <input
+        type="checkbox"
+        checked={createBackup}
+        onchange={(e) => onCreateBackupChange((e.target as HTMLInputElement).checked)}
+        disabled={compressing}
+        class="mt-0.5"
+      />
+      <div>
+        <p class="text-sm font-medium text-gray-700">Keep original files as .bak backups</p>
+        <p class="text-xs text-gray-600 mt-1">
+          Each compressed file keeps its original next to it as <code>&lt;name&gt;.bak</code>, so you can always restore it.
+        </p>
+      </div>
+    </label>
+    {#if !createBackup}
+      <div class="mt-3 p-2 bg-amber-50 border border-amber-300 rounded text-xs text-amber-800 flex items-start gap-2">
+        <svg class="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+        </svg>
+        <span>Originals will be <strong>permanently deleted</strong> after each successful compression. Skipped and failed files are never touched.</span>
+      </div>
+    {/if}
+  </div>
+
   <!-- Progress Indicator -->
   {#if compressing}
     <div class="mb-6 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg">
@@ -121,9 +154,10 @@
           style="width: {totalToProcess > 0 ? (processedCount / totalToProcess * 100).toFixed(1) : 0}%"
         ></div>
       </div>
-      <div class="mt-2 text-xs text-gray-600">
-        <p>• {successCount} successful</p>
-        <p>• {errorCount} failed</p>
+      <div class="mt-2 text-xs text-gray-600 flex gap-4">
+        <p>• {compressedCount} compressed</p>
+        <p>• {skippedCount} skipped</p>
+        <p>• {failedCount} failed</p>
       </div>
     </div>
   {/if}
@@ -139,7 +173,7 @@
         {selectedFiles.size === compressibleFiles.length ? 'Deselect All' : 'Select All'}
       </button>
     </div>
-    <div class="border rounded-lg divide-y max-h-[400px] overflow-y-auto">
+    <div class="border rounded-lg divide-y max-h-[40vh] overflow-y-auto">
       {#each compressibleFiles as file}
         <FileListItem 
           {file} 

@@ -34,6 +34,7 @@
     "@testing-library/svelte": "^5.2.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "~4.0.18",
     "@vitest/ui": "^2.1.9",
     "flowbite-svelte": "^0.46.0",
     "flowbite-svelte-icons": "^1.6.0",

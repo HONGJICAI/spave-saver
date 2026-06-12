@@ -1,5 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { scanDirectory, findDuplicates, findSimilarImages, findEmptyFiles, deleteFiles, getStorageStats } from './index';
+import {
+  scanDirectory,
+  findDuplicates,
+  findSimilarImages,
+  findEmptyFiles,
+  deleteFiles,
+  getStorageStats,
+  getCompressionPlugins,
+  setPluginQuality,
+  scanCompressibleFiles,
+  compressFilesInPlace,
+} from './index';
 
 // Mock Tauri API
 vi.mock('@tauri-apps/api/core', () => ({
@@ -59,6 +70,80 @@ describe('API Layer', () => {
 
     it('deleteFiles resolves in web mode', async () => {
       await expect(deleteFiles(['/file1.txt'])).resolves.toBe(1);
+    });
+
+    it('getCompressionPlugins returns all three plugins with quality in web mode', async () => {
+      const plugins = await getCompressionPlugins();
+
+      expect(plugins.map(p => p.name)).toEqual([
+        'Image ZIP to WebP ZIP',
+        'WebP Converter',
+        'Animated WebP Converter',
+      ]);
+      for (const plugin of plugins) {
+        expect(plugin.description).toBeTruthy();
+        expect(plugin.quality).toBe(85);
+      }
+    });
+
+    it('setPluginQuality resolves in web mode', async () => {
+      await expect(setPluginQuality('WebP Converter', 60)).resolves.toBeUndefined();
+    });
+
+    it('scanCompressibleFiles returns compressible and rejected lists in web mode', async () => {
+      const result = await scanCompressibleFiles(['/test/path'], ['WebP Converter']);
+
+      expect(result.compressible.length).toBeGreaterThan(0);
+      expect(result.compressible[0]).toHaveProperty('path');
+      expect(result.compressible[0]).toHaveProperty('estimated_savings');
+      expect(result.compressible[0]).toHaveProperty('plugin_name');
+
+      expect(result.rejected.length).toBeGreaterThan(0);
+      expect(result.rejected[0].rejection_reasons[0]).toHaveProperty('plugin_name');
+      expect(result.rejected[0].rejection_reasons[0]).toHaveProperty('reason');
+    });
+
+    it('compressFilesInPlace returns compressed status with backup in web mode', async () => {
+      const results = await compressFilesInPlace(['/photos/a.png'], ['WebP Converter']);
+
+      expect(results).toHaveLength(1);
+      expect(results[0].status).toBe('compressed');
+      expect(results[0].success).toBe(true);
+      expect(results[0].backup_path).toBe('/photos/a.png.bak');
+      expect(results[0].savings).toBeGreaterThan(0);
+    });
+
+    it('compressFilesInPlace mock covers all three result states', async () => {
+      const results = await compressFilesInPlace(
+        ['/photos/a.png', '/photos/already-tiny.png', '/photos/locked.png'],
+        ['WebP Converter']
+      );
+
+      expect(results.map(r => r.status)).toEqual(['compressed', 'skipped', 'failed']);
+
+      const skipped = results[1];
+      expect(skipped.success).toBe(true);
+      expect(skipped.reason).toContain('not smaller');
+      expect(skipped.backup_path).toBeUndefined();
+
+      const failed = results[2];
+      expect(failed.success).toBe(false);
+      expect(failed.error).toBeTruthy();
+    });
+
+    it('compressFilesInPlace omits backup_path when backups are disabled', async () => {
+      const results = await compressFilesInPlace(['/photos/a.png'], ['WebP Converter'], false);
+
+      expect(results[0].status).toBe('compressed');
+      expect(results[0].backup_path).toBeUndefined();
+    });
+
+    it('scanCompressibleFiles mock includes files that will skip and fail', async () => {
+      const result = await scanCompressibleFiles(['/test/path'], ['WebP Converter']);
+      const paths = result.compressible.map(f => f.path);
+
+      expect(paths.some(p => p.includes('already-tiny'))).toBe(true);
+      expect(paths.some(p => p.includes('locked'))).toBe(true);
     });
   });
 

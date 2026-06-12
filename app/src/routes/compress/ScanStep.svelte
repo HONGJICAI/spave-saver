@@ -133,7 +133,7 @@
       </div>
     </div>
 
-    <div class="border rounded-lg divide-y max-h-[500px] overflow-y-auto">
+    <div class="border rounded-lg divide-y max-h-[45vh] overflow-y-auto">
       {#each filesByPlugin as [pluginName, files]}
         <div class="bg-gray-50">
           <!-- Plugin Header -->
@@ -193,7 +193,7 @@
         </button>
 
         {#if showRejected}
-          <div class="mt-2 border rounded-lg divide-y max-h-[400px] overflow-y-auto">
+          <div class="mt-2 border rounded-lg divide-y max-h-[30vh] overflow-y-auto">
             {#each rejectedFiles as file}
               <div class="p-3 bg-white">
                 <div class="flex items-start gap-2">

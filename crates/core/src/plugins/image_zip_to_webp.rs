@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use image::DynamicImage;
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use zip::{write::FileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::compress_plugins::{
-    get_file_size, has_extension, CompressionPlugin, CompressionResult, PluginMetadata,
+    create_output_file, get_file_size, has_extension, CompressionPlugin, CompressionResult,
+    PluginMetadata,
 };
 
 /// Plugin for converting ZIP files containing images to WebP format
@@ -104,7 +105,9 @@ impl ImageZipToWebpZipPlugin {
         let input_file = File::open(source)?;
         let mut input_archive = ZipArchive::new(input_file)?;
 
-        let output_file = File::create(output)?;
+        // create_new (O_EXCL): fails instead of overwriting a concurrent
+        // writer's output with the same name
+        let output_file = create_output_file(output)?;
         let mut output_archive = ZipWriter::new(output_file);
 
         let options = FileOptions::default()
@@ -247,40 +250,18 @@ impl CompressionPlugin for ImageZipToWebpZipPlugin {
         };
 
         let output_path = output_dir.join(&output_filename);
-        let backup_path = source.with_extension(".backup");
 
         // Ensure output directory exists
         fs::create_dir_all(output_dir)?;
 
-        if output_path.exists() {
-            return Err(anyhow!(
-                "Output file {} already exists",
-                output_path.display()
-            ));
-        }
-
-        if backup_path.exists() {
-            return Err(anyhow!(
-                "Backup file {} already exists",
-                backup_path.display()
-            ));
-        }
-
-        // Process the ZIP file
+        // Process the ZIP file (the output is created with create_new, so an
+        // existing file fails the operation); the manager backs up the
+        // original and moves the output over the source path (replace_source)
         let (files_processed, _original_total, _compressed_total) = self
             .process_zip(source, &output_path)
             .with_context(|| format!("Failed to process ZIP file: {}", source.display()))?;
 
         let compressed_size = get_file_size(&output_path)?;
-
-        // Rename the origin file as backup and move the new ZIP to original location
-        fs::rename(source, backup_path)?;
-        fs::rename(&output_path, source).with_context(|| {
-            format!(
-                "Failed to move converted ZIP to original location: {}",
-                source.display()
-            )
-        })?;
 
         Ok(CompressionResult {
             original_size,
@@ -289,17 +270,62 @@ impl CompressionPlugin for ImageZipToWebpZipPlugin {
             plugin_name: self.metadata().name,
             files_processed,
             backup_path: None,
+            replace_source: true,
         })
     }
 
     fn supported_extensions(&self) -> Vec<&str> {
         vec!["zip"]
     }
+
+    fn quality(&self) -> Option<f32> {
+        Some(self.quality)
+    }
+
+    fn set_quality(&mut self, quality: f32) -> bool {
+        self.quality = quality.clamp(0.0, 100.0);
+        true
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compress_plugins::{CompressionOutcome, PluginManager};
+    use image::{ImageBuffer, Rgb};
+    use std::io::Cursor;
+
+    /// PNG bytes of deterministic noise; PNG stores noise poorly, so the
+    /// WebP conversion inside the ZIP reliably shrinks it
+    fn noise_png_bytes(width: u32, height: u32) -> Vec<u8> {
+        let mut seed = 0x2545F491u32;
+        let img: image::RgbImage = ImageBuffer::from_fn(width, height, |_, _| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            Rgb([
+                (seed & 0xFF) as u8,
+                ((seed >> 8) & 0xFF) as u8,
+                ((seed >> 16) & 0xFF) as u8,
+            ])
+        });
+        let mut buf = Vec::new();
+        img.write_to(&mut Cursor::new(&mut buf), image::ImageOutputFormat::Png)
+            .unwrap();
+        buf
+    }
+
+    fn build_zip(path: &Path, entries: &[(&str, &[u8])]) {
+        let file = File::create(path).unwrap();
+        let mut writer = ZipWriter::new(file);
+        // Stored, so the noise PNG stays large and conversion shows savings
+        let options = FileOptions::default().compression_method(CompressionMethod::Stored);
+        for (name, data) in entries {
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(data).unwrap();
+        }
+        writer.finish().unwrap();
+    }
 
     #[test]
     fn test_is_image_file() {
@@ -315,5 +341,69 @@ mod tests {
         assert!(ImageZipToWebpZipPlugin::is_webp("photo.webp"));
         assert!(ImageZipToWebpZipPlugin::is_webp("PHOTO.WEBP"));
         assert!(!ImageZipToWebpZipPlugin::is_webp("photo.png"));
+    }
+
+    #[test]
+    fn test_can_handle_zip_variants() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = ImageZipToWebpZipPlugin::new();
+        let png = noise_png_bytes(32, 32);
+
+        // ZIP made only of convertible images
+        let images_zip = dir.path().join("images.zip");
+        build_zip(&images_zip, &[("a.png", &png), ("b.png", &png)]);
+        let (can_handle, _) = plugin.can_handle(&images_zip).unwrap();
+        assert!(can_handle);
+
+        // ZIP without images
+        let text_zip = dir.path().join("text.zip");
+        build_zip(&text_zip, &[("readme.txt", b"hello")]);
+        let (can_handle, _) = plugin.can_handle(&text_zip).unwrap();
+        assert!(!can_handle);
+
+        // Mixed ZIP below the default min_image_ratio (1.0)
+        let mixed_zip = dir.path().join("mixed.zip");
+        build_zip(&mixed_zip, &[("a.png", &png), ("readme.txt", b"hello")]);
+        let (can_handle, _) = plugin.can_handle(&mixed_zip).unwrap();
+        assert!(!can_handle);
+
+        // A corrupt "ZIP" must surface as an error, not a panic
+        let fake_zip = dir.path().join("fake.zip");
+        fs::write(&fake_zip, b"this is not a zip archive").unwrap();
+        assert!(plugin.can_handle(&fake_zip).is_err());
+    }
+
+    #[test]
+    fn test_end_to_end_manager_replaces_zip_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("photos.zip");
+        let png = noise_png_bytes(128, 128);
+        build_zip(&source, &[("a.png", &png), ("b.png", &png)]);
+        let original_bytes = fs::read(&source).unwrap();
+
+        let mut manager = PluginManager::new();
+        manager.register(Box::new(ImageZipToWebpZipPlugin::new()));
+
+        let outcome = manager.process_file(&source, dir.path(), None, true).unwrap();
+        match outcome {
+            CompressionOutcome::Compressed(result) => {
+                // The converted ZIP takes over the original path (replace_source)
+                assert_eq!(result.output_path, source);
+                assert!(result.compressed_size < result.original_size);
+
+                let backup = result.backup_path.unwrap();
+                assert_eq!(backup, dir.path().join("photos.zip.bak"));
+                assert_eq!(fs::read(&backup).unwrap(), original_bytes);
+
+                // All image entries inside the new ZIP are WebP now
+                let file = File::open(&source).unwrap();
+                let mut archive = ZipArchive::new(file).unwrap();
+                let names: Vec<String> =
+                    (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().to_string()).collect();
+                assert_eq!(names.len(), 2);
+                assert!(names.iter().all(|n| n.ends_with(".webp")), "entries: {:?}", names);
+            }
+            other => panic!("expected Compressed, got {:?}", other),
+        }
     }
 }

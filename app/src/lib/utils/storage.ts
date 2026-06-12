@@ -5,6 +5,7 @@
 const STORAGE_KEYS = {
   SCAN_PATHS: 'space-saver:scanPaths',
   FILTER_CONFIG: 'space-saver:filterConfig',
+  COMPRESS_SETTINGS: 'space-saver:compressSettings',
 } as const;
 
 export function loadFromStorage<T>(key: string, defaultValue: T): T {
