@@ -10,6 +10,8 @@ import {
   setPluginQuality,
   scanCompressibleFiles,
   compressFilesInPlace,
+  getSkipCacheInfo,
+  clearSkipCache,
 } from './index';
 
 // Mock Tauri API
@@ -136,6 +138,12 @@ describe('API Layer', () => {
 
       expect(results[0].status).toBe('compressed');
       expect(results[0].backup_path).toBeUndefined();
+    });
+
+    it('skip cache info and clear resolve in web mode', async () => {
+      const info = await getSkipCacheInfo();
+      expect(info.entries).toBeGreaterThanOrEqual(0);
+      await expect(clearSkipCache()).resolves.toBeGreaterThanOrEqual(0);
     });
 
     it('scanCompressibleFiles mock includes files that will skip and fail', async () => {

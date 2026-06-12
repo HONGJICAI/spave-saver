@@ -1,11 +1,35 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 
+use once_cell::sync::Lazy;
+use space_saver_core::skip_cache::{FileFingerprint, SkipCache};
 use space_saver_service::api::{
     DuplicateGroup, FilterConfig, ScanResult, SimilarGroup, StorageStats,
 };
 use space_saver_service::FileOperations;
 use space_saver_service::ServiceApi;
+
+/// Remembers files a plugin already failed to shrink at a given quality so
+/// scans can exclude them. Keyed by (path, plugin, quality), guarded by a
+/// size+mtime fingerprint — no hashing, so lookups stay one stat call.
+static SKIP_CACHE: Lazy<Arc<RwLock<SkipCache>>> = Lazy::new(|| {
+    let cache = SkipCache::load(skip_cache_path());
+    Arc::new(RwLock::new(cache))
+});
+
+#[cfg(not(test))]
+fn skip_cache_path() -> PathBuf {
+    space_saver_utils::Config::load_or_default()
+        .cache_dir
+        .join("compress_skip_cache.json")
+}
+
+/// Tests must not touch the real user cache; give each test process its own file
+#[cfg(test)]
+fn skip_cache_path() -> PathBuf {
+    std::env::temp_dir().join(format!("space-saver-test-skip-cache-{}.json", std::process::id()))
+}
 
 /// Scan multiple directories
 #[tauri::command]
@@ -213,14 +237,38 @@ pub async fn scan_compressible_files(
     let mut compressible_files = Vec::new();
     let mut rejected_files = Vec::new();
 
+    let skip_cache = SKIP_CACHE.read().map_err(|e| e.to_string())?;
+
     for file_info in all_files {
         let mut rejection_reasons = Vec::new();
         let mut accepted = None;
+
+        // The scanner already stat'ed the file; reuse size + mtime
+        let fingerprint = FileFingerprint {
+            size: file_info.size,
+            mtime: file_info.modified,
+        };
+        let path_str = file_info.path.to_string_lossy().to_string();
 
         for plugin_name in &active_plugins {
             match manager.check_plugin_capability(&file_info.path, plugin_name) {
                 Ok(Some((metadata, can_handle, reason, estimate_ratio))) => {
                     if can_handle {
+                        // Skip-cache: this exact file state already produced no
+                        // size reduction with this plugin at this quality
+                        let quality = manager.get_plugin_quality(plugin_name);
+                        if skip_cache.is_known_skip(&path_str, &fingerprint, plugin_name, quality)
+                        {
+                            rejection_reasons.push(serde_json::json!({
+                                "plugin_name": metadata.name,
+                                "reason": format!(
+                                    "Previously produced no size reduction{} (cached result; file unchanged)",
+                                    quality.map(|q| format!(" at quality {}", q)).unwrap_or_default()
+                                ),
+                            }));
+                            continue;
+                        }
+
                         let ratio = estimate_ratio.unwrap_or(0.0);
                         let estimated_compressed =
                             (file_info.size as f64 * (1.0 - ratio as f64)) as u64;
@@ -329,6 +377,11 @@ pub async fn compress_files_in_place(
         // manager performs the backup before replacing anything
         match manager.process_file(&source, source_dir, orders, create_backup) {
             Ok(CompressionOutcome::Compressed(compress_result)) => {
+                // Any remembered no-reduction results for this path are stale
+                // (the file at this path was replaced or renamed away)
+                if let Ok(mut cache) = SKIP_CACHE.write() {
+                    cache.invalidate_path(&path_str);
+                }
                 results.push(serde_json::json!({
                     "status": "compressed",
                     "success": true,
@@ -344,6 +397,14 @@ pub async fn compress_files_in_place(
                 plugin_name,
                 reason,
             }) => {
+                // Remember this so the next scan excludes the file instead of
+                // re-running the trial compression (skip leaves it untouched)
+                if let Ok(fingerprint) = FileFingerprint::of(&source) {
+                    let quality = manager.get_plugin_quality(&plugin_name);
+                    if let Ok(mut cache) = SKIP_CACHE.write() {
+                        cache.record_skip(&path_str, fingerprint, &plugin_name, quality);
+                    }
+                }
                 results.push(serde_json::json!({
                     "status": "skipped",
                     "success": true,
@@ -363,7 +424,31 @@ pub async fn compress_files_in_place(
         }
     }
 
+    // Persist new skip-cache entries; the cache is an optimization, so a
+    // failed save must not fail the compression that already happened
+    if let Ok(mut cache) = SKIP_CACHE.write() {
+        if let Err(e) = cache.save() {
+            tracing::warn!(error = %e, "Failed to persist compression skip cache");
+        }
+    }
+
     Ok(results)
+}
+
+/// Number of remembered no-size-reduction results
+#[tauri::command]
+pub async fn get_skip_cache_info() -> Result<serde_json::Value, String> {
+    let cache = SKIP_CACHE.read().map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "entries": cache.len() }))
+}
+
+/// Forget all remembered no-size-reduction results; returns how many were removed
+#[tauri::command]
+pub async fn clear_skip_cache() -> Result<usize, String> {
+    let mut cache = SKIP_CACHE.write().map_err(|e| e.to_string())?;
+    let removed = cache.clear();
+    cache.save().map_err(|e| e.to_string())?;
+    Ok(removed)
 }
 
 #[cfg(test)]
@@ -392,6 +477,10 @@ mod tests {
     fn paths_of(dir: &tempfile::TempDir) -> Vec<String> {
         vec![dir.path().to_string_lossy().to_string()]
     }
+
+    /// Tests touching the shared SKIP_CACHE must not run concurrently
+    /// (clear_skip_cache would wipe another test's entries mid-flight)
+    static CACHE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[tokio::test]
     async fn scan_finds_compressible_and_rejected_files() {
@@ -520,6 +609,119 @@ mod tests {
             "no .bak file when backups are disabled"
         );
         assert!(dir.path().join("noise.webp").exists());
+    }
+
+    #[tokio::test]
+    async fn skip_cache_excludes_unchanged_files_from_scan() {
+        let _guard = CACHE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("noise.png");
+        save_noise_png(&source, 64, 64);
+        let path_str = source.to_string_lossy().to_string();
+
+        let active = vec!["WebP Converter".to_string()];
+
+        // First scan: compressible
+        let result = scan_compressible_files(paths_of(&dir), active.clone(), None)
+            .await
+            .unwrap();
+        assert_eq!(result["compressible"].as_array().unwrap().len(), 1);
+
+        // Simulate a remembered "no size reduction" result for this exact state
+        {
+            let manager = space_saver_core::compress_plugins::global_plugin_manager();
+            let quality = manager.read().unwrap().get_plugin_quality("WebP Converter");
+            let fp = FileFingerprint::of(&source).unwrap();
+            SKIP_CACHE
+                .write()
+                .unwrap()
+                .record_skip(&path_str, fp, "WebP Converter", quality);
+        }
+
+        // Second scan: excluded, with a cached-result rejection reason
+        let result = scan_compressible_files(paths_of(&dir), active.clone(), None)
+            .await
+            .unwrap();
+        assert_eq!(result["compressible"].as_array().unwrap().len(), 0);
+        let rejected = result["rejected"].as_array().unwrap();
+        assert_eq!(rejected.len(), 1);
+        let reason = rejected[0]["rejection_reasons"][0]["reason"].as_str().unwrap();
+        assert!(reason.contains("cached"), "reason: {reason}");
+
+        // Touch the file (content change bumps size): cache entry no longer matches
+        std::fs::write(&source, b"changed").unwrap();
+        let result = scan_compressible_files(paths_of(&dir), active.clone(), None)
+            .await
+            .unwrap();
+        // The png is no longer a valid image but it must not be cache-rejected;
+        // it should not appear with a "cached" reason anymore
+        let all = serde_json::to_string(&result).unwrap();
+        assert!(!all.contains("cached result"), "stale fingerprint must miss: {all}");
+
+        SKIP_CACHE.write().unwrap().invalidate_path(&path_str);
+    }
+
+    #[tokio::test]
+    async fn skip_cache_clear_restores_files() {
+        let _guard = CACHE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("photo.png");
+        save_noise_png(&source, 32, 32);
+        let path_str = source.to_string_lossy().to_string();
+
+        let fp = FileFingerprint::of(&source).unwrap();
+        let manager = space_saver_core::compress_plugins::global_plugin_manager();
+        let quality = manager.read().unwrap().get_plugin_quality("WebP Converter");
+        SKIP_CACHE
+            .write()
+            .unwrap()
+            .record_skip(&path_str, fp, "WebP Converter", quality);
+
+        let info = get_skip_cache_info().await.unwrap();
+        assert!(info["entries"].as_u64().unwrap() >= 1);
+
+        let removed = clear_skip_cache().await.unwrap();
+        assert!(removed >= 1);
+
+        let result = scan_compressible_files(
+            paths_of(&dir),
+            vec!["WebP Converter".to_string()],
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["compressible"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn successful_compression_invalidates_skip_entries() {
+        let _guard = CACHE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("invalidate-me.png");
+        save_noise_png(&source, 64, 64);
+        let path_str = source.to_string_lossy().to_string();
+
+        // A (stale) skip entry exists for the path
+        let fp = FileFingerprint::of(&source).unwrap();
+        SKIP_CACHE
+            .write()
+            .unwrap()
+            .record_skip(&path_str, fp, "Some Old Plugin", None);
+
+        let results = compress_files_in_place(
+            vec![path_str.clone()],
+            vec!["WebP Converter".to_string()],
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(results[0]["status"], "compressed");
+
+        let cache = SKIP_CACHE.read().unwrap();
+        assert!(
+            !cache.is_known_skip(&path_str, &fp, "Some Old Plugin", None),
+            "entries for a compressed path must be invalidated"
+        );
     }
 
     #[tokio::test]

@@ -6,6 +6,8 @@
     setPluginQuality,
     scanCompressibleFiles,
     compressFilesInPlace,
+    getSkipCacheInfo,
+    clearSkipCache,
     type CompressionPlugin,
     type CompressibleFile,
     type RejectedFile,
@@ -50,6 +52,26 @@
   let skippedCount = $derived(compressionResults.filter(r => r.status === 'skipped').length);
   let failedCount = $derived(compressionResults.filter(r => r.status === 'failed').length);
 
+  // Skip memory: files remembered as "compression produced no size reduction"
+  let skipCacheEntries = $state(0);
+
+  async function refreshSkipCacheInfo() {
+    try {
+      skipCacheEntries = (await getSkipCacheInfo()).entries;
+    } catch (err) {
+      console.error("Failed to load skip cache info:", err);
+    }
+  }
+
+  async function handleClearSkipCache() {
+    try {
+      await clearSkipCache();
+      await refreshSkipCacheInfo();
+    } catch (err) {
+      $appState.error = err instanceof Error ? err.message : "Failed to clear skip memory";
+    }
+  }
+
   onMount(async () => {
     try {
       const plugins = await getCompressionPlugins();
@@ -80,6 +102,7 @@
       console.error("Failed to load plugins:", err);
       $appState.error = "Failed to load compression plugins";
     }
+    refreshSkipCacheInfo();
   });
 
   function persistSettings() {
@@ -257,6 +280,7 @@
     } finally {
       compressing = false;
       currentlyProcessing = [];
+      refreshSkipCacheInfo();
     }
   }
 
@@ -313,6 +337,23 @@
             onMoveDown={movePluginDown}
             onQualityChange={handleQualityChange}
           />
+
+          <!-- Skip memory: remembered no-size-reduction results -->
+          <div class="mt-4 bg-white rounded-lg shadow p-4 flex items-center justify-between gap-2">
+            <div class="min-w-0">
+              <p class="text-sm font-medium text-gray-700">Skip memory</p>
+              <p class="text-xs text-gray-600 mt-0.5">
+                {skipCacheEntries} file{skipCacheEntries !== 1 ? 's' : ''} remembered as not compressible at current settings; scans exclude them until they change.
+              </p>
+            </div>
+            <button
+              onclick={handleClearSkipCache}
+              disabled={skipCacheEntries === 0}
+              class="px-3 py-1.5 text-xs font-medium text-gray-600 border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+            >
+              Clear
+            </button>
+          </div>
         </div>
 
         <div class="lg:col-span-2 min-w-0">
