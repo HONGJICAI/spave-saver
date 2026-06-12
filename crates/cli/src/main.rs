@@ -135,7 +135,7 @@ async fn scan_command(path: PathBuf, detailed: bool) -> Result<()> {
     if detailed && !files.is_empty() {
         println!("\n📁 Top 10 largest files:");
         let mut sorted_files = files;
-        sorted_files.sort_by(|a, b| b.size.cmp(&a.size));
+        sorted_files.sort_by_key(|f| std::cmp::Reverse(f.size));
 
         let mut table = Table::new();
         table.load_preset(UTF8_FULL);
