@@ -394,7 +394,10 @@ mod tests {
         let result = plugin.process(&source, dir.path()).unwrap();
 
         // The plugin itself must never touch the source; that's the manager's job
-        assert!(source.exists(), "plugin must not delete or rename the source");
+        assert!(
+            source.exists(),
+            "plugin must not delete or rename the source"
+        );
         assert!(result.output_path.exists());
         assert_eq!(result.output_path, dir.path().join("noise.webp"));
         assert!(
@@ -415,7 +418,9 @@ mod tests {
         let mut manager = PluginManager::new();
         manager.register(Box::new(WebPConverterPlugin::new()));
 
-        let outcome = manager.process_file(&source, dir.path(), None, true).unwrap();
+        let outcome = manager
+            .process_file(&source, dir.path(), None, true)
+            .unwrap();
         match outcome {
             CompressionOutcome::Compressed(result) => {
                 assert!(!source.exists(), "original renamed to backup");

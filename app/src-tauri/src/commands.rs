@@ -8,8 +8,8 @@ use space_saver_core::skip_cache::{FileFingerprint, SkipCache};
 use space_saver_service::api::{
     DuplicateGroup, FilterConfig, ScanResult, SimilarGroup, StorageStats,
 };
-use space_saver_service::{DeleteMode, DeleteResult, FileOperations};
 use space_saver_service::ServiceApi;
+use space_saver_service::{DeleteMode, DeleteResult, FileOperations};
 
 /// Remembers files a plugin already failed to shrink at a given quality so
 /// scans can exclude them. Keyed by (path, plugin, quality), guarded by a
@@ -29,7 +29,10 @@ fn skip_cache_path() -> PathBuf {
 /// Tests must not touch the real user cache; give each test process its own file
 #[cfg(test)]
 fn skip_cache_path() -> PathBuf {
-    std::env::temp_dir().join(format!("space-saver-test-skip-cache-{}.json", std::process::id()))
+    std::env::temp_dir().join(format!(
+        "space-saver-test-skip-cache-{}.json",
+        std::process::id()
+    ))
 }
 
 /// Content-hash cache for duplicate scans: unchanged files (same size+mtime)
@@ -48,7 +51,10 @@ fn hash_cache_path() -> PathBuf {
 
 #[cfg(test)]
 fn hash_cache_path() -> PathBuf {
-    std::env::temp_dir().join(format!("space-saver-test-hash-cache-{}.json", std::process::id()))
+    std::env::temp_dir().join(format!(
+        "space-saver-test-hash-cache-{}.json",
+        std::process::id()
+    ))
 }
 
 /// Scan multiple directories
@@ -292,8 +298,7 @@ pub async fn scan_compressible_files(
                         // Skip-cache: this exact file state already produced no
                         // size reduction with this plugin at this quality
                         let quality = manager.get_plugin_quality(plugin_name);
-                        if skip_cache.is_known_skip(&path_str, &fingerprint, plugin_name, quality)
-                        {
+                        if skip_cache.is_known_skip(&path_str, &fingerprint, plugin_name, quality) {
                             rejection_reasons.push(serde_json::json!({
                                 "plugin_name": metadata.name,
                                 "reason": format!(
@@ -307,8 +312,7 @@ pub async fn scan_compressible_files(
                         let ratio = estimate_ratio.unwrap_or(0.0);
                         let estimated_compressed =
                             (file_info.size as f64 * (1.0 - ratio as f64)) as u64;
-                        let estimated_savings =
-                            file_info.size.saturating_sub(estimated_compressed);
+                        let estimated_savings = file_info.size.saturating_sub(estimated_compressed);
 
                         accepted = Some(serde_json::json!({
                             "path": file_info.path.to_string_lossy(),
@@ -556,8 +560,7 @@ mod tests {
     async fn scan_rejects_unknown_plugin_name() {
         let dir = tempfile::tempdir().unwrap();
         let result =
-            scan_compressible_files(paths_of(&dir), vec!["No Such Plugin".to_string()], None)
-                .await;
+            scan_compressible_files(paths_of(&dir), vec!["No Such Plugin".to_string()], None).await;
         assert!(result.is_err());
     }
 
@@ -680,7 +683,9 @@ mod tests {
         assert_eq!(result["compressible"].as_array().unwrap().len(), 0);
         let rejected = result["rejected"].as_array().unwrap();
         assert_eq!(rejected.len(), 1);
-        let reason = rejected[0]["rejection_reasons"][0]["reason"].as_str().unwrap();
+        let reason = rejected[0]["rejection_reasons"][0]["reason"]
+            .as_str()
+            .unwrap();
         assert!(reason.contains("cached"), "reason: {reason}");
 
         // Touch the file (content change bumps size): cache entry no longer matches
@@ -691,7 +696,10 @@ mod tests {
         // The png is no longer a valid image but it must not be cache-rejected;
         // it should not appear with a "cached" reason anymore
         let all = serde_json::to_string(&result).unwrap();
-        assert!(!all.contains("cached result"), "stale fingerprint must miss: {all}");
+        assert!(
+            !all.contains("cached result"),
+            "stale fingerprint must miss: {all}"
+        );
 
         SKIP_CACHE.write().unwrap().invalidate_path(&path_str);
     }
@@ -718,13 +726,10 @@ mod tests {
         let removed = clear_skip_cache().await.unwrap();
         assert!(removed >= 1);
 
-        let result = scan_compressible_files(
-            paths_of(&dir),
-            vec!["WebP Converter".to_string()],
-            None,
-        )
-        .await
-        .unwrap();
+        let result =
+            scan_compressible_files(paths_of(&dir), vec!["WebP Converter".to_string()], None)
+                .await
+                .unwrap();
         assert_eq!(result["compressible"].as_array().unwrap().len(), 1);
     }
 
@@ -779,7 +784,10 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert!(results[0].success);
         assert!(!existing.exists());
-        assert!(!results[1].success, "missing file must be reported as failed");
+        assert!(
+            !results[1].success,
+            "missing file must be reported as failed"
+        );
         assert!(results[1].error.is_some());
     }
 

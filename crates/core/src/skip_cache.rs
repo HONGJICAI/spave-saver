@@ -127,7 +127,12 @@ impl SkipCache {
     }
 
     /// Look up the entry (regardless of fingerprint) for diagnostics
-    pub fn entry_for(&self, path: &str, plugin_name: &str, quality: Option<f32>) -> Option<&SkipEntry> {
+    pub fn entry_for(
+        &self,
+        path: &str,
+        plugin_name: &str,
+        quality: Option<f32>,
+    ) -> Option<&SkipEntry> {
         self.data
             .entries
             .get(path)?

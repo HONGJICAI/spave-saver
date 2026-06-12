@@ -66,9 +66,7 @@ impl CompressionPlugin for AnimatedWebPConverterPlugin {
                 if AVAILABLE_TOOL.is_none() {
                     return Ok((
                         false,
-                        Some(
-                            "Requires gif2webp or ffmpeg in PATH; neither was found".to_string(),
-                        ),
+                        Some("Requires gif2webp or ffmpeg in PATH; neither was found".to_string()),
                     ));
                 }
                 Ok((

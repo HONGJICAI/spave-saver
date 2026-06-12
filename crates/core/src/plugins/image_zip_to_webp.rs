@@ -384,7 +384,9 @@ mod tests {
         let mut manager = PluginManager::new();
         manager.register(Box::new(ImageZipToWebpZipPlugin::new()));
 
-        let outcome = manager.process_file(&source, dir.path(), None, true).unwrap();
+        let outcome = manager
+            .process_file(&source, dir.path(), None, true)
+            .unwrap();
         match outcome {
             CompressionOutcome::Compressed(result) => {
                 // The converted ZIP takes over the original path (replace_source)
@@ -398,10 +400,15 @@ mod tests {
                 // All image entries inside the new ZIP are WebP now
                 let file = File::open(&source).unwrap();
                 let mut archive = ZipArchive::new(file).unwrap();
-                let names: Vec<String> =
-                    (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().to_string()).collect();
+                let names: Vec<String> = (0..archive.len())
+                    .map(|i| archive.by_index(i).unwrap().name().to_string())
+                    .collect();
                 assert_eq!(names.len(), 2);
-                assert!(names.iter().all(|n| n.ends_with(".webp")), "entries: {:?}", names);
+                assert!(
+                    names.iter().all(|n| n.ends_with(".webp")),
+                    "entries: {:?}",
+                    names
+                );
             }
             other => panic!("expected Compressed, got {:?}", other),
         }
