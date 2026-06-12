@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use image::DynamicImage;
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use zip::{write::FileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::compress_plugins::{
-    get_file_size, has_extension, CompressionPlugin, CompressionResult, PluginMetadata,
+    create_output_file, get_file_size, has_extension, CompressionPlugin, CompressionResult,
+    PluginMetadata,
 };
 
 /// Plugin for converting ZIP files containing images to WebP format
@@ -104,7 +105,9 @@ impl ImageZipToWebpZipPlugin {
         let input_file = File::open(source)?;
         let mut input_archive = ZipArchive::new(input_file)?;
 
-        let output_file = File::create(output)?;
+        // create_new (O_EXCL): fails instead of overwriting a concurrent
+        // writer's output with the same name
+        let output_file = create_output_file(output)?;
         let mut output_archive = ZipWriter::new(output_file);
 
         let options = FileOptions::default()
@@ -251,15 +254,9 @@ impl CompressionPlugin for ImageZipToWebpZipPlugin {
         // Ensure output directory exists
         fs::create_dir_all(output_dir)?;
 
-        if output_path.exists() {
-            return Err(anyhow!(
-                "Output file {} already exists",
-                output_path.display()
-            ));
-        }
-
-        // Process the ZIP file; the manager backs up the original and moves
-        // the output over the source path (replace_source)
+        // Process the ZIP file (the output is created with create_new, so an
+        // existing file fails the operation); the manager backs up the
+        // original and moves the output over the source path (replace_source)
         let (files_processed, _original_total, _compressed_total) = self
             .process_zip(source, &output_path)
             .with_context(|| format!("Failed to process ZIP file: {}", source.display()))?;

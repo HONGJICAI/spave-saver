@@ -1,4 +1,4 @@
-use crate::compress_plugins::{CompressionPlugin, CompressionResult};
+use crate::compress_plugins::{create_output_file, CompressionPlugin, CompressionResult};
 use once_cell::sync::Lazy;
 use std::path::Path;
 use std::process::Command;
@@ -113,12 +113,10 @@ impl CompressionPlugin for AnimatedWebPConverterPlugin {
         let output_path = output_dir.join(format!("{}.animated.webp", stem));
         let temp_path = output_dir.join(format!("{}.animated_temp.webp", stem));
 
-        if output_path.exists() {
-            return Err(anyhow::anyhow!(
-                "Output file already exists: {}",
-                output_path.display()
-            ));
-        }
+        // The external tools cannot create-exclusively, so reserve the final
+        // output name atomically (create_new) before converting; a concurrent
+        // writer targeting the same name fails here instead of overwriting
+        create_output_file(&output_path)?;
 
         // Convert using gif2webp (best quality) or ffmpeg as fallback;
         // the manager handles size comparison, backup, and replacement
@@ -126,15 +124,19 @@ impl CompressionPlugin for AnimatedWebPConverterPlugin {
             .convert_with_gif2webp(source, &temp_path)
             .or_else(|_| self.convert_with_ffmpeg(source, &temp_path));
 
-        match conversion_result {
-            Ok(()) => {
-                let compressed_size = std::fs::metadata(&temp_path)?.len();
+        let finish = || -> anyhow::Result<u64> {
+            let compressed_size = std::fs::metadata(&temp_path)?.len();
+            // Replaces our own empty placeholder with the real output
+            std::fs::rename(&temp_path, &output_path)?;
+            Ok(compressed_size)
+        };
+
+        match conversion_result.and_then(|()| finish()) {
+            Ok(compressed_size) => {
                 info!(
                     "Animated WebP conversion complete. Original: {} bytes, WebP: {} bytes",
                     original_size, compressed_size
                 );
-
-                std::fs::rename(&temp_path, &output_path)?;
 
                 Ok(CompressionResult {
                     output_path,
@@ -147,8 +149,9 @@ impl CompressionPlugin for AnimatedWebPConverterPlugin {
                 })
             }
             Err(e) => {
-                // Clean up temp file if it exists
+                // Clean up the temp file and the reserved placeholder
                 let _ = std::fs::remove_file(&temp_path);
+                let _ = std::fs::remove_file(&output_path);
                 Err(anyhow::anyhow!("Animated WebP conversion failed: {}", e))
             }
         }

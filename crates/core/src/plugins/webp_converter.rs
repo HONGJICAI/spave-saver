@@ -2,11 +2,11 @@ use anyhow::{Context, Result};
 use image::{DynamicImage, GenericImageView};
 use std::fs;
 use std::path::Path;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::compress_plugins::{
-    generate_output_filename, get_file_size, has_extension, CompressionPlugin, CompressionResult,
-    PluginMetadata,
+    create_output_file, generate_output_filename, get_file_size, has_extension, CompressionPlugin,
+    CompressionResult, PluginMetadata,
 };
 
 /// Plugin for converting images to WebP format
@@ -134,18 +134,6 @@ impl WebPConverterPlugin {
             }
         }
 
-        // Check if output file already exists
-        if output.exists() {
-            warn!(
-                output = %output.display(),
-                "Output file already exists, skipping WebP conversion"
-            );
-            return Err(anyhow::anyhow!(
-                "Output file already exists: {}",
-                output.display()
-            ));
-        }
-
         match self.encode_webp(&img, output) {
             Ok(_) => Ok(()),
             Err(e) => {
@@ -166,6 +154,7 @@ impl WebPConverterPlugin {
 
     fn encode_webp(&self, img: &DynamicImage, output: &Path) -> Result<()> {
         // Without webp feature, use external webp crate
+        use std::io::Write;
         use webp::Encoder;
 
         let (width, height) = img.dimensions();
@@ -174,7 +163,10 @@ impl WebPConverterPlugin {
         let encoder = Encoder::from_rgba(&rgba, width, height);
         let encoded = encoder.encode(self.quality);
 
-        std::fs::write(output, &*encoded).with_context(|| {
+        // create_new (O_EXCL): a concurrent writer targeting the same output
+        // name fails here instead of silently overwriting
+        let mut file = create_output_file(output)?;
+        file.write_all(&encoded).with_context(|| {
             error!(
                 output = %output.display(),
                 width = width,
@@ -434,6 +426,35 @@ mod tests {
             }
             other => panic!("expected Compressed, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_same_stem_collision_fails_cleanly() {
+        // photo.png and photo.bmp both target photo.webp; the second
+        // conversion must fail (create_new) instead of overwriting the first,
+        // and its original must stay untouched
+        let dir = tempfile::tempdir().unwrap();
+        let png = save_noise_png(dir.path(), "photo.png", 64, 64);
+        let bmp = dir.path().join("photo.bmp");
+        noise_image(64, 64).save(&bmp).unwrap();
+
+        let mut manager = PluginManager::new();
+        manager.register(Box::new(WebPConverterPlugin::new()));
+
+        let first = manager.process_file(&png, dir.path(), None, true).unwrap();
+        assert!(matches!(first, CompressionOutcome::Compressed(_)));
+        let webp_bytes = fs::read(dir.path().join("photo.webp")).unwrap();
+
+        let second = manager.process_file(&bmp, dir.path(), None, true);
+        // {:#} shows the full anyhow chain, not just the outermost context
+        let err = format!("{:#}", second.unwrap_err());
+        assert!(err.contains("already exists"), "unexpected error: {err}");
+        assert!(bmp.exists(), "second original must be untouched");
+        assert_eq!(
+            fs::read(dir.path().join("photo.webp")).unwrap(),
+            webp_bytes,
+            "first output must not be overwritten"
+        );
     }
 
     #[test]

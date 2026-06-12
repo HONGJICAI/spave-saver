@@ -457,6 +457,25 @@ pub fn get_file_size(path: &Path) -> Result<u64> {
     Ok(fs::metadata(path)?.len())
 }
 
+/// Atomically create a new output file, failing if it already exists.
+/// Check and creation are a single syscall (O_EXCL), so two concurrent
+/// writers can never silently overwrite each other's output — e.g. when
+/// `photo.jpg` and `photo.png` in the same directory both target
+/// `photo.webp`, the second one fails cleanly instead.
+pub fn create_output_file(path: &Path) -> Result<fs::File> {
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                anyhow!("Output file already exists: {}", path.display())
+            } else {
+                anyhow!("Failed to create output file {}: {}", path.display(), e)
+            }
+        })
+}
+
 /// Helper to generate output filename with new extension
 pub fn generate_output_filename(source: &Path, new_ext: &str) -> PathBuf {
     let stem = source
