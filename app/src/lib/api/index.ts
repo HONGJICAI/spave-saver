@@ -394,6 +394,35 @@ export async function compressFilesInPlace(
 }
 
 /**
+ * Skip-cache info: how many "no size reduction" results are remembered
+ */
+export interface SkipCacheInfo {
+  entries: number;
+}
+
+/**
+ * Get the number of remembered no-size-reduction results
+ */
+export async function getSkipCacheInfo(): Promise<SkipCacheInfo> {
+  if (isTauri) {
+    return await invoke<SkipCacheInfo>("get_skip_cache_info");
+  } else {
+    return { entries: 2 };
+  }
+}
+
+/**
+ * Forget all remembered no-size-reduction results; returns how many were removed
+ */
+export async function clearSkipCache(): Promise<number> {
+  if (isTauri) {
+    return await invoke<number>("clear_skip_cache");
+  } else {
+    return 2;
+  }
+}
+
+/**
  * Check if running in Tauri mode
  */
 export function isTauriMode(): boolean {
