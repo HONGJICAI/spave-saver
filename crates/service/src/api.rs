@@ -293,6 +293,50 @@ impl ServiceApi {
             .await
     }
 
+    /// Find empty files and empty folders across multiple directories.
+    /// `filter` applies to files only: size/extension/pattern are file-level
+    /// concepts, and an empty folder contains no files to match them against.
+    /// Folders are reported topmost-only (a folder whose subtree contains no
+    /// files subsumes the empty folders inside it); scan roots are never
+    /// reported.
+    pub async fn find_empty_in_paths(
+        &self,
+        paths: Vec<PathBuf>,
+        filter: Option<FilterConfig>,
+    ) -> Result<EmptyScanResult> {
+        use space_saver_core::scanner::find_empty_dirs;
+
+        let mut empty_files = Vec::new();
+        let mut empty_folders = Vec::new();
+
+        for path in paths {
+            let mut files = self.scanner.scan(&path)?;
+
+            // Apply filters if provided
+            if let Some(ref filter_config) = filter {
+                files = filter_config.apply(files);
+            }
+
+            empty_files.extend(
+                files
+                    .into_iter()
+                    .filter(|f| f.size == 0)
+                    .map(|f| f.path.to_string_lossy().to_string()),
+            );
+
+            empty_folders.extend(
+                find_empty_dirs(&path)?
+                    .into_iter()
+                    .map(|p| p.to_string_lossy().to_string()),
+            );
+        }
+
+        Ok(EmptyScanResult {
+            empty_files,
+            empty_folders,
+        })
+    }
+
     /// Get storage statistics across multiple directories (primary method)
     pub async fn get_storage_stats_for_paths(
         &self,
@@ -386,6 +430,15 @@ pub struct SimilarGroup {
     pub similarity_score: f32,
 }
 
+/// Empty files and empty folders found in a scan
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmptyScanResult {
+    /// Files of size 0
+    pub empty_files: Vec<String>,
+    /// Topmost directories whose subtree contains no files
+    pub empty_folders: Vec<String>,
+}
+
 /// Storage statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageStats {
@@ -458,6 +511,92 @@ mod tests {
         assert!(
             groups.is_empty(),
             "empty files must not form a duplicate group"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_find_empty_in_paths_finds_files_and_folders() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("empty.txt"), b"").unwrap();
+        fs::write(dir.path().join("not-empty.txt"), b"content").unwrap();
+        // Empty chain: only the topmost dir is reported
+        fs::create_dir_all(dir.path().join("hollow/nested")).unwrap();
+
+        let api = ServiceApi::new();
+        let result = api
+            .find_empty_in_paths(vec![dir.path().to_path_buf()], None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.empty_files,
+            vec![dir.path().join("empty.txt").to_string_lossy().to_string()]
+        );
+        assert_eq!(
+            result.empty_folders,
+            vec![dir.path().join("hollow").to_string_lossy().to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_find_empty_in_paths_no_results() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("file.txt"), b"content").unwrap();
+
+        let api = ServiceApi::new();
+        let result = api
+            .find_empty_in_paths(vec![dir.path().to_path_buf()], None)
+            .await
+            .unwrap();
+
+        assert!(result.empty_files.is_empty());
+        assert!(result.empty_folders.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_find_empty_in_paths_empty_input() {
+        let api = ServiceApi::new();
+        let result = api.find_empty_in_paths(vec![], None).await.unwrap();
+        assert!(result.empty_files.is_empty());
+        assert!(result.empty_folders.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_find_empty_in_paths_nonexistent_path_errors() {
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("does-not-exist");
+
+        let api = ServiceApi::new();
+        assert!(api.find_empty_in_paths(vec![missing], None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_find_empty_in_paths_filter_applies_to_files_not_folders() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("empty.txt"), b"").unwrap();
+        fs::write(dir.path().join("empty.log"), b"").unwrap();
+        fs::create_dir(dir.path().join("hollow")).unwrap();
+
+        let api = ServiceApi::new();
+        let filter = FilterConfig {
+            min_size: None,
+            max_size: None,
+            extensions: Some(vec!["log".to_string()]),
+            file_pattern: None,
+        };
+        let result = api
+            .find_empty_in_paths(vec![dir.path().to_path_buf()], Some(filter))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.empty_files,
+            vec![dir.path().join("empty.log").to_string_lossy().to_string()]
+        );
+        // Folders are unaffected by file-level filters
+        assert_eq!(
+            result.empty_folders,
+            vec![dir.path().join("hollow").to_string_lossy().to_string()]
         );
     }
 

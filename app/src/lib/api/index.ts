@@ -4,12 +4,12 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ScanResult, DuplicateGroup, SimilarGroup, StorageStats, FileInfo } from "../types";
+import type { ScanResult, DuplicateGroup, SimilarGroup, StorageStats, FileInfo, EmptyScanResult } from "../types";
 import type { FilterConfig } from "../stores/app";
 import { mockScanResult } from "../../mock/scan";
 import { mockFindDuplicates } from "../../mock/duplicates";
 import { mockFindSimilar } from "../../mock/similar";
-import { mockEmptyFiles } from "../../mock/empty";
+import { mockEmptyItems } from "../../mock/empty";
 import { mockStorageStats } from "../../mock/stats";
 import { mockPlugins, isKnownPlugin } from "../../mock/plugins";
 import { mockSkipCache } from "../../mock/skipCache";
@@ -17,7 +17,7 @@ import { mockSkipCache } from "../../mock/skipCache";
 // Check if running in Tauri environment
 const isTauri = "__TAURI_INTERNALS__" in window;
 
-export { type ScanResult, type DuplicateGroup, type SimilarGroup, type StorageStats, type FileInfo, type FilterConfig };
+export { type ScanResult, type DuplicateGroup, type SimilarGroup, type StorageStats, type FileInfo, type FilterConfig, type EmptyScanResult };
 
 /**
  * Scan multiple directories for files
@@ -67,14 +67,19 @@ export async function findSimilarImages(
 }
 
 /**
- * Find empty files across multiple directories
+ * Find empty files (0 bytes) and empty folders (no files anywhere beneath
+ * them, topmost-only) across multiple directories. The filter applies to
+ * files only.
  */
-export async function findEmptyFiles(paths: string[], filter?: FilterConfig): Promise<string[]> {
+export async function findEmptyItems(paths: string[], filter?: FilterConfig): Promise<EmptyScanResult> {
   if (isTauri) {
-    return await invoke<string[]>("empty_folder_check", { paths, filter: filter || null });
+    return await invoke<EmptyScanResult>("empty_folder_check", { paths, filter: filter || null });
   } else {
-    const results = await Promise.all(paths.map(path => mockEmptyFiles(path)));
-    return results.flat();
+    const results = await Promise.all(paths.map(path => mockEmptyItems(path)));
+    return {
+      empty_files: results.flatMap(r => r.empty_files),
+      empty_folders: results.flatMap(r => r.empty_folders),
+    };
   }
 }
 
