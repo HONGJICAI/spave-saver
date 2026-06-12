@@ -89,7 +89,7 @@ mock 数据本身的要求：
 - 异步操作的 mock 用 `setTimeout` 加少量延迟，让 loading 状态可见
 - API 层每个函数在 `app/src/lib/api/index.test.ts` 都要有测试
 
-**自检方法**：`commands.rs` 里每个 `#[tauri::command]` 都应能在 `api/index.ts` 找到对应封装和 mock 分支。发现缺口要补齐。
+**契约测试**：`app/src/lib/api/contract.test.ts` 会解析 `commands.rs`、`lib.rs` 和 `api/index.ts`，强制三方一致（command 已定义 ↔ 已注册 ↔ API 层有封装）。漏注册、漏封装或 invoke 名字打错都会在 CI 挂掉，不要通过放宽该测试来绕过，应补齐缺口。
 
 ### 4. 前后端类型契约
 

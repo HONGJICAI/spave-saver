@@ -10,9 +10,9 @@
     "sourceMap": true,
     "strict": true,
     "moduleResolution": "bundler",
-    "lib": ["ES2019", "DOM", "DOM.Iterable"],
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "target": "ES2019",
-    "types": ["vitest/globals"]
+    "types": ["vitest/globals", "node"]
     // "paths": {
     //   "$lib": ["./src/lib"],
     //   "$lib/*": ["./src/lib/*"]
