@@ -164,8 +164,11 @@ impl ServiceApi {
             .flatten()
             .collect();
 
+        // `fresh` carries the cache key for newly computed hashes; they are
+        // inserted after the parallel section so workers never contend on the
+        // cache's write lock
         let hasher = FileHasher::new_blake3();
-        let hashed: Vec<(String, FileInfo)> = candidates
+        let hashed: Vec<(String, FileInfo, Option<(String, FileFingerprint)>)> = candidates
             .into_par_iter()
             .filter_map(|file| {
                 let path_str = file.path.to_string_lossy().to_string();
@@ -177,7 +180,7 @@ impl ServiceApi {
                 if let Some(cache) = &self.hash_cache {
                     if let Ok(cache) = cache.read() {
                         if let Some(hash) = cache.get(&path_str, &fingerprint) {
-                            return Some((hash.to_string(), file));
+                            return Some((hash.to_string(), file, None));
                         }
                     }
                 }
@@ -185,20 +188,19 @@ impl ServiceApi {
                 // Unreadable files are dropped from the result; they cannot
                 // be safely treated as duplicates of anything
                 let hash = hasher.hash_file(&file.path).ok()?;
-
-                if let Some(cache) = &self.hash_cache {
-                    if let Ok(mut cache) = cache.write() {
-                        cache.insert(&path_str, fingerprint, hash.clone());
-                    }
-                }
-                Some((hash, file))
+                Some((hash, file, Some((path_str, fingerprint))))
             })
             .collect();
 
+        let mut cache_guard = self.hash_cache.as_ref().and_then(|c| c.write().ok());
         let mut hash_map: HashMap<String, Vec<FileInfo>> = HashMap::new();
-        for (hash, file) in hashed {
+        for (hash, file, fresh) in hashed {
+            if let (Some(cache), Some((path_str, fingerprint))) = (cache_guard.as_mut(), fresh) {
+                cache.insert(&path_str, fingerprint, hash.clone());
+            }
             hash_map.entry(hash).or_default().push(file);
         }
+        drop(cache_guard);
 
         // Step 3: Build duplicate groups
         let duplicates: Vec<DuplicateGroup> = hash_map

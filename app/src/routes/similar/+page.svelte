@@ -58,15 +58,21 @@
 
     deleteInProgress = true;
     try {
-      await deleteFiles(Array.from(selectedFiles));
-      // Remove deleted files from groups
+      // Only files actually deleted leave the UI; failures stay selected
+      const results = await deleteFiles(Array.from(selectedFiles));
+      const deleted = new Set(results.filter(r => r.success).map(r => r.path));
+      const failed = results.filter(r => !r.success);
+
       groups = groups.map(group => ({
         ...group,
-        files: group.files.filter(f => !selectedFiles.has(f.path))
+        files: group.files.filter(f => !deleted.has(f.path))
       })).filter(group => group.files.length > 1);
-      
-      selectedFiles = new Set();
+
+      selectedFiles = new Set(failed.map(r => r.path));
       showDeleteConfirm = false;
+      if (failed.length > 0) {
+        $appState.error = `Failed to delete ${failed.length} file(s): ${failed[0].error ?? 'unknown error'}`;
+      }
     } catch (err) {
       $appState.error = err instanceof Error ? err.message : 'Failed to delete files';
     } finally {
