@@ -284,7 +284,8 @@ export async function scanCompressibleFiles(
       filter
     });
   } else {
-    // Mock scan results
+    // Mock scan results. "already-tiny" and "locked" are picked up by the
+    // compressFilesInPlace mock to demo the skipped/failed states in web mode.
     return {
       compressible: [
         {
@@ -295,11 +296,32 @@ export async function scanCompressibleFiles(
           plugin_name: "WebP Converter"
         },
         {
+          path: "/path/to/wallpaper.png",
+          original_size: 3145728,
+          estimated_compressed_size: 2202010,
+          estimated_savings: 943718,
+          plugin_name: "WebP Converter"
+        },
+        {
           path: "/path/to/photos.zip",
           original_size: 5120000,
           estimated_compressed_size: 3686400,
           estimated_savings: 1433600,
           plugin_name: "Image ZIP to WebP ZIP"
+        },
+        {
+          path: "/path/to/already-tiny.png",
+          original_size: 98304,
+          estimated_compressed_size: 72744,
+          estimated_savings: 25560,
+          plugin_name: "WebP Converter"
+        },
+        {
+          path: "/path/to/locked.png",
+          original_size: 512000,
+          estimated_compressed_size: 358400,
+          estimated_savings: 153600,
+          plugin_name: "WebP Converter"
         }
       ],
       rejected: [
@@ -332,17 +354,38 @@ export async function compressFilesInPlace(
       pluginOrders
     });
   } else {
-    // Mock in-place compression
-    return filePaths.map(path => ({
-      status: "compressed" as const,
-      success: true,
-      path,
-      backup_path: `${path}.bak`,
-      original_size: 1024000,
-      compressed_size: 716800,
-      savings: 307200,
-      plugin_name: "WebP Converter"
-    }));
+    // Mock in-place compression. Status is derived from the file name so the
+    // three-state UI (compressed / skipped / failed) can be previewed in web
+    // mode: "already-tiny" files skip, "locked" files fail, the rest compress.
+    return filePaths.map(path => {
+      if (path.includes("already-tiny")) {
+        return {
+          status: "skipped" as const,
+          success: true,
+          path,
+          plugin_name: "WebP Converter",
+          reason: "Compressed output (102400 bytes) is not smaller than the original (98304 bytes); original kept"
+        };
+      }
+      if (path.includes("locked")) {
+        return {
+          status: "failed" as const,
+          success: false,
+          path,
+          error: "Failed to back up original file: Permission denied (os error 13)"
+        };
+      }
+      return {
+        status: "compressed" as const,
+        success: true,
+        path,
+        backup_path: `${path}.bak`,
+        original_size: 1024000,
+        compressed_size: 716800,
+        savings: 307200,
+        plugin_name: "WebP Converter"
+      };
+    });
   }
 }
 

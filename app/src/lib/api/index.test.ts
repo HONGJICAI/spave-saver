@@ -112,6 +112,32 @@ describe('API Layer', () => {
       expect(results[0].backup_path).toBe('/photos/a.png.bak');
       expect(results[0].savings).toBeGreaterThan(0);
     });
+
+    it('compressFilesInPlace mock covers all three result states', async () => {
+      const results = await compressFilesInPlace(
+        ['/photos/a.png', '/photos/already-tiny.png', '/photos/locked.png'],
+        ['WebP Converter']
+      );
+
+      expect(results.map(r => r.status)).toEqual(['compressed', 'skipped', 'failed']);
+
+      const skipped = results[1];
+      expect(skipped.success).toBe(true);
+      expect(skipped.reason).toContain('not smaller');
+      expect(skipped.backup_path).toBeUndefined();
+
+      const failed = results[2];
+      expect(failed.success).toBe(false);
+      expect(failed.error).toBeTruthy();
+    });
+
+    it('scanCompressibleFiles mock includes files that will skip and fail', async () => {
+      const result = await scanCompressibleFiles(['/test/path'], ['WebP Converter']);
+      const paths = result.compressible.map(f => f.path);
+
+      expect(paths.some(p => p.includes('already-tiny'))).toBe(true);
+      expect(paths.some(p => p.includes('locked'))).toBe(true);
+    });
   });
 
   describe('Tauri Mode', () => {
