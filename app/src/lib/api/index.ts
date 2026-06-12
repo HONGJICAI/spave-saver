@@ -101,16 +101,28 @@ export async function deleteFiles(
   if (isTauri) {
     return await invoke<DeleteResult[]>("delete_files", { paths, mode });
   } else {
-    // Mock deletion: "locked" files fail so the error UI can be previewed
+    // Mock deletion, demoing the failure modes:
+    // - "locked" files always fail (permission denied)
+    // - "usb-drive" files fail in trash mode only (no trash directory on
+    //   that volume), succeeding when retried as permanent deletion
     return new Promise((resolve) => {
       setTimeout(
         () =>
           resolve(
-            paths.map((path) =>
-              path.includes("locked")
-                ? { path, success: false, error: "Permission denied (os error 13)" }
-                : { path, success: true }
-            )
+            paths.map((path) => {
+              if (path.includes("locked")) {
+                return { path, success: false, error: "Permission denied (os error 13)" };
+              }
+              if (path.includes("usb-drive") && mode === "trash") {
+                return {
+                  path,
+                  success: false,
+                  error:
+                    "Cannot move to trash: the volume has no trash directory. Retry with permanent deletion.",
+                };
+              }
+              return { path, success: true };
+            })
           ),
         300
       );
