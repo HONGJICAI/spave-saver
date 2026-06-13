@@ -23,7 +23,10 @@
       <PathSelector />
     </div>
 
-    <!-- Scrollable page content -->
+    <!-- Scrollable page content. This <main> is the single source of page
+         padding and width: full-width, left-aligned, with p-8 gutters. Pages
+         should NOT add their own max-w-* / mx-auto / outer padding so the
+         layout stays consistent across routes. -->
     <main class="flex-1 min-h-0 p-8 overflow-y-auto overflow-x-hidden">
       <slot />
     </main>

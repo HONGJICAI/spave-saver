@@ -63,7 +63,7 @@
   <title>Home - Space-Saver</title>
 </svelte:head>
 
-<div class="max-w-5xl mx-auto">
+<div>
   <!-- Hero Section -->
   <div class="text-center mb-12">
     <div class="text-6xl mb-4">💾</div>

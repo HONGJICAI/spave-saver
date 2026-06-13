@@ -129,7 +129,7 @@
   });
 </script>
 
-<div class="p-6">
+<div>
   <div class="mb-6">
     <h1 class="text-3xl font-bold text-gray-900 mb-2">Empty Files & Folders Finder</h1>
     <p class="text-gray-600">Find and remove empty files (0 bytes) and folders that contain no files</p>
