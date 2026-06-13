@@ -159,7 +159,7 @@
   let selectedMismatch = $derived(mismatchItems.filter((b) => selectedPaths.has(b.path)));
 </script>
 
-<div class="p-6">
+<div>
   <div class="mb-6">
     <h1 class="text-3xl font-bold text-gray-900 mb-2">Broken Files Finder</h1>
     <p class="text-gray-600">

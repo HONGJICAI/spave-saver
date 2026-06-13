@@ -305,7 +305,7 @@
   }
 </script>
 
-<div class="h-full flex flex-col max-w-[1600px] mx-auto w-full">
+<div class="h-full flex flex-col w-full">
   <div class="mb-4 shrink-0">
     <h1 class="text-3xl font-bold text-gray-900 mb-2">Smart Compression Manager</h1>
     <p class="text-gray-600">Manage plugins, scan files, and compress with backups</p>

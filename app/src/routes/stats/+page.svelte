@@ -51,7 +51,7 @@
   <title>Statistics - Space-Saver</title>
 </svelte:head>
 
-<div class="max-w-7xl">
+<div>
   <h1 class="text-3xl font-bold text-gray-900 mb-6">📊 Storage Statistics</h1>
   
   <div class="bg-white rounded-lg shadow p-6 mb-6">

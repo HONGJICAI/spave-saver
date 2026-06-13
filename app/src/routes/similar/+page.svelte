@@ -170,7 +170,7 @@
   <title>Similar Media - Space-Saver</title>
 </svelte:head>
 
-<div class="max-w-7xl">
+<div>
   <h1 class="text-3xl font-bold text-gray-900 mb-2">🖼️ Find Similar Media</h1>
   <p class="text-gray-600 mb-6">Find visually similar images so you can keep the best copy and delete the rest.</p>
 

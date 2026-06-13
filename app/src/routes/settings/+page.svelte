@@ -120,7 +120,7 @@
   }
 </script>
 
-<div class="p-6 max-w-3xl">
+<div>
   <div class="mb-6 flex items-start justify-between">
     <div>
       <h1 class="text-3xl font-bold text-gray-900 mb-2">Settings</h1>
