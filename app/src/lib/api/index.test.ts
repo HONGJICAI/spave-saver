@@ -192,6 +192,33 @@ describe('API Layer', () => {
       await expect(setPluginQuality('WebP Converter', 60)).resolves.toBeUndefined();
     });
 
+    it('setPluginQuality persists quality so getCompressionPlugins reflects it', async () => {
+      await setPluginQuality('WebP Converter', 50);
+
+      const plugins = await getCompressionPlugins();
+      const webp = plugins.find(p => p.name === 'WebP Converter');
+      expect(webp?.quality).toBe(50);
+      // Other plugins keep their default
+      expect(plugins.find(p => p.name === 'Animated WebP Converter')?.quality).toBe(85);
+
+      // It is stored in the config (the single source of truth)
+      expect((await getConfig()).plugin_quality['WebP Converter']).toBe(50);
+    });
+
+    it('setPluginQuality clamps out-of-range quality like the backend', async () => {
+      await setPluginQuality('WebP Converter', 250);
+      expect((await getConfig()).plugin_quality['WebP Converter']).toBe(100);
+    });
+
+    it('resetConfig clears persisted plugin quality back to the default', async () => {
+      await setPluginQuality('WebP Converter', 40);
+      expect((await getCompressionPlugins()).find(p => p.name === 'WebP Converter')?.quality).toBe(40);
+
+      await resetConfig();
+      const plugins = await getCompressionPlugins();
+      expect(plugins.find(p => p.name === 'WebP Converter')?.quality).toBe(85);
+    });
+
     it('scanCompressibleFiles returns compressible and rejected lists in web mode', async () => {
       const result = await scanCompressibleFiles(['/test/path'], ['WebP Converter']);
 

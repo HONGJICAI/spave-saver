@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -33,6 +34,13 @@ pub struct Config {
     /// Consumed by the frontend as the default for the compress confirm step.
     #[serde(default = "default_compress_backup")]
     pub default_compress_backup: bool,
+
+    /// Per-plugin compression quality (0-100), keyed by plugin name. The single
+    /// source of truth for quality: the plugin manager is seeded from this at
+    /// startup, and changes are written back here. Plugins absent from the map
+    /// keep their built-in default.
+    #[serde(default)]
+    pub plugin_quality: BTreeMap<String, f32>,
 
     /// Scan settings
     pub scan: ScanConfig,
@@ -86,6 +94,7 @@ impl Default for Config {
             image_similarity_threshold: 0.9,
             default_delete_mode: default_delete_mode(),
             default_compress_backup: default_compress_backup(),
+            plugin_quality: BTreeMap::new(),
             scan: ScanConfig::default(),
         }
     }
@@ -174,6 +183,15 @@ impl Config {
                 self.default_delete_mode
             );
         }
+        for (name, quality) in &self.plugin_quality {
+            if !(0.0..=100.0).contains(quality) {
+                anyhow::bail!(
+                    "plugin_quality for '{}' must be between 0 and 100, got {}",
+                    name,
+                    quality
+                );
+            }
+        }
         Ok(())
     }
 
@@ -223,6 +241,31 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.default_delete_mode, "trash");
         assert!(config.default_compress_backup);
+        assert!(config.plugin_quality.is_empty());
+    }
+
+    #[test]
+    fn test_plugin_quality_roundtrips() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        let mut config = Config::default();
+        config
+            .plugin_quality
+            .insert("WebP Converter".to_string(), 60.0);
+        config.save(&config_path).unwrap();
+
+        let loaded = Config::load(&config_path).unwrap();
+        assert_eq!(loaded.plugin_quality.get("WebP Converter"), Some(&60.0));
+    }
+
+    #[test]
+    fn test_validate_rejects_out_of_range_plugin_quality() {
+        let mut config = Config::default();
+        config
+            .plugin_quality
+            .insert("WebP Converter".to_string(), 150.0);
+        assert!(config.validate().is_err());
     }
 
     #[test]

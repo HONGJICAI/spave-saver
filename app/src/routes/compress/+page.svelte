@@ -25,7 +25,6 @@
     order: string[];
     active: string[];
     poolSize: number;
-    quality: Record<string, number>;
     backup?: boolean;
   }
 
@@ -95,15 +94,8 @@
         activePlugins = new Set(plugins.filter(p => saved.active.includes(p.name)).map(p => p.name));
         poolSize = saved.poolSize ?? 2;
         createBackup = saved.backup ?? backupDefault;
-        for (const plugin of plugins) {
-          const quality = saved.quality?.[plugin.name];
-          if (quality != null && plugin.quality != null && quality !== plugin.quality) {
-            plugin.quality = quality;
-            setPluginQuality(plugin.name, quality).catch(err =>
-              console.error(`Failed to restore quality for ${plugin.name}:`, err)
-            );
-          }
-        }
+        // Quality comes back from the backend already (seeded from config),
+        // so it is no longer restored from localStorage here.
       } else {
         activePlugins = new Set(plugins.map(p => p.name));
       }
@@ -116,13 +108,12 @@
   });
 
   function persistSettings() {
+    // Quality is persisted backend-side (config) via setPluginQuality; only
+    // UI preferences (order, active set, pool size, backup) live here.
     saveToStorage<CompressSettings>(storageKeys.COMPRESS_SETTINGS, {
       order: availablePlugins.map(p => p.name),
       active: Array.from(activePlugins),
       poolSize,
-      quality: Object.fromEntries(
-        availablePlugins.filter(p => p.quality != null).map(p => [p.name, p.quality!])
-      ),
       backup: createBackup,
     });
   }

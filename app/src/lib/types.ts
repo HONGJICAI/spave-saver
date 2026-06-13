@@ -119,6 +119,8 @@ export interface AppConfig {
   image_similarity_threshold: number;
   default_delete_mode: "trash" | "permanent";
   default_compress_backup: boolean;
+  /** Per-plugin quality (0-100) keyed by plugin name; absent = built-in default */
+  plugin_quality: Record<string, number>;
   scan: ScanConfig;
 }
 

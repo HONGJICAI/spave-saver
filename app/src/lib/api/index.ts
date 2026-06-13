@@ -312,25 +312,31 @@ export async function getCompressionPlugins(): Promise<CompressionPlugin[]> {
   if (isTauri) {
     return await invoke<CompressionPlugin[]>("get_compression_plugins");
   } else {
-    // Copies, so UI-side mutation cannot leak into the shared mock list
-    return mockPlugins.map(p => ({ ...p }));
+    // Reflect persisted quality from the mock config (the backend seeds the
+    // plugin manager from config at startup); copies prevent UI mutation from
+    // leaking into the shared mock list.
+    const cfg = getMockConfig();
+    return mockPlugins.map(p => ({ ...p, quality: cfg.plugin_quality[p.name] ?? p.quality }));
   }
 }
 
 /**
- * Set the quality (0-100) of a compression plugin
+ * Set the quality (0-100) of a compression plugin. Persisted to the config so
+ * it survives a restart (config is the single source of truth for quality).
  */
 export async function setPluginQuality(pluginName: string, quality: number): Promise<void> {
   if (isTauri) {
     await invoke("set_plugin_quality", { pluginName, quality });
   } else {
-    // Mirrors the backend: unknown plugin names fail (quality itself is
-    // clamped backend-side, never an error). Like a real invoke() failure,
-    // the rejection value is the backend's plain error string.
+    // Mirrors the backend: unknown plugin names fail. Like a real invoke()
+    // failure, the rejection value is the backend's plain error string.
     if (!isKnownPlugin(pluginName)) {
       return Promise.reject(`Plugin not found: ${pluginName}`);
     }
-    // Success is a no-op: mock plugins keep their displayed value in the UI
+    // Persist the clamped value into the mock config, just like the backend
+    const cfg = getMockConfig();
+    cfg.plugin_quality[pluginName] = Math.max(0, Math.min(100, quality));
+    setMockConfig(cfg);
   }
 }
 

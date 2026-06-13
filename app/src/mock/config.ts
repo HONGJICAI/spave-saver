@@ -19,6 +19,7 @@ export function defaultConfig(): AppConfig {
     image_similarity_threshold: 0.9,
     default_delete_mode: 'trash',
     default_compress_backup: true,
+    plugin_quality: {},
     scan: {
       follow_links: false,
       max_depth: null,

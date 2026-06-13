@@ -203,14 +203,51 @@ pub async fn get_compression_plugins() -> Result<Vec<serde_json::Value>, String>
         .collect())
 }
 
-/// Set the quality (0-100) of a compression plugin
+/// Set the quality (0-100) of a compression plugin. The new value is also
+/// written to the config file so it survives a restart (config is the single
+/// source of truth for quality; the plugin manager is seeded from it at boot).
 #[tauri::command]
 pub async fn set_plugin_quality(plugin_name: String, quality: f32) -> Result<(), String> {
+    {
+        let manager = space_saver_core::compress_plugins::global_plugin_manager();
+        let mut manager = manager.write().map_err(|e| e.to_string())?;
+        manager
+            .set_plugin_quality(&plugin_name, quality)
+            .map_err(|e| e.to_string())?;
+    }
+    persist_plugin_quality(&config_path(), &plugin_name, quality)
+}
+
+/// Record a plugin's quality in the config file. The stored value is clamped to
+/// match what the plugin manager applies, so config and runtime never diverge.
+fn persist_plugin_quality(
+    path: &std::path::Path,
+    plugin_name: &str,
+    quality: f32,
+) -> Result<(), String> {
+    let mut config = load_config_from(path)?;
+    config
+        .plugin_quality
+        .insert(plugin_name.to_string(), quality.clamp(0.0, 100.0));
+    save_config_to(path, &config)
+}
+
+/// Seed the global plugin manager with the per-plugin qualities saved in config.
+/// Called once at startup so persisted quality takes effect. Unknown plugin
+/// names in config are ignored rather than failing the launch.
+pub fn seed_plugin_quality_from_config() {
+    let config = load_config_from(&config_path()).unwrap_or_default();
+    if config.plugin_quality.is_empty() {
+        return;
+    }
     let manager = space_saver_core::compress_plugins::global_plugin_manager();
-    let mut manager = manager.write().map_err(|e| e.to_string())?;
-    manager
-        .set_plugin_quality(&plugin_name, quality)
-        .map_err(|e| e.to_string())
+    let mut guard = match manager.write() {
+        Ok(guard) => guard,
+        Err(_) => return,
+    };
+    for (name, quality) in &config.plugin_quality {
+        let _ = guard.set_plugin_quality(name, *quality);
+    }
 }
 
 /// Scan paths and find compressible files with estimates
@@ -1096,6 +1133,21 @@ mod tests {
         // The reset must have been written, not just returned
         let loaded = load_config_from(&path).unwrap();
         assert_eq!(loaded.default_delete_mode, "trash");
+    }
+
+    #[test]
+    fn persist_plugin_quality_writes_clamped_value_to_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        persist_plugin_quality(&path, "WebP Converter", 70.0).unwrap();
+        let loaded = load_config_from(&path).unwrap();
+        assert_eq!(loaded.plugin_quality.get("WebP Converter"), Some(&70.0));
+
+        // Out-of-range input is clamped to the same range the manager applies
+        persist_plugin_quality(&path, "WebP Converter", 150.0).unwrap();
+        let loaded = load_config_from(&path).unwrap();
+        assert_eq!(loaded.plugin_quality.get("WebP Converter"), Some(&100.0));
     }
 
     #[tokio::test]
