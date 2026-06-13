@@ -357,6 +357,68 @@ describe('API Layer', () => {
       expect(compressible).toEqual({ compressible: [], rejected: [] });
     });
 
+    describe('excludePaths filter', () => {
+      it('scanDirectory drops files at or beneath an excluded path', async () => {
+        const all = await scanDirectory('/test/path');
+        const filtered = await scanDirectory('/test/path', { excludePaths: ['/test/path/Videos'] });
+
+        expect(filtered.files.length).toBe(all.files.length - 1);
+        expect(filtered.files.some(f => f.path.includes('/Videos/'))).toBe(false);
+        // file_count and total_size are recomputed from what's left
+        expect(filtered.file_count).toBe(filtered.files.length);
+        expect(filtered.total_size).toBe(filtered.files.reduce((s, f) => s + f.size, 0));
+        expect(filtered.total_size).toBeLessThan(all.total_size);
+      });
+
+      it('scanDirectory exclusion is component-wise, not a string prefix', async () => {
+        // Excluding "/test/path/Video" must NOT drop files under "/Videos/"
+        const filtered = await scanDirectory('/test/path', { excludePaths: ['/test/path/Video'] });
+        expect(filtered.files.some(f => f.path.includes('/Videos/'))).toBe(true);
+      });
+
+      it('findEmptyItems drops empty files and folders beneath an excluded path', async () => {
+        const filtered = await findEmptyItems(['/test/path'], { excludePaths: ['/test/path/locked'] });
+
+        expect(filtered.empty_files.some(p => p.includes('/locked/'))).toBe(false);
+        expect(filtered.empty_folders.some(p => p.includes('/locked/'))).toBe(false);
+        // Unrelated items survive
+        expect(filtered.empty_files.length).toBeGreaterThan(0);
+        expect(filtered.empty_folders.length).toBeGreaterThan(0);
+      });
+
+      it('findBrokenFiles drops files beneath an excluded path', async () => {
+        const all = await findBrokenFiles(['/test/path']);
+        const filtered = await findBrokenFiles(['/test/path'], { excludePaths: ['/test/path/locked'] });
+
+        expect(filtered.length).toBe(all.length - 1);
+        expect(filtered.some(b => b.path.includes('/locked/'))).toBe(false);
+      });
+
+      it('findDuplicates trims excluded files and drops groups left with one file', async () => {
+        // "/test/path/backup" holds one file from group 1 (trimmed to 2 copies)
+        // and one from group 2 (which then collapses to a single file = no group)
+        const filtered = await findDuplicates(['/test/path'], { excludePaths: ['/test/path/backup'] });
+
+        expect(filtered.every(g => g.files.every(f => !f.path.includes('/backup/')))).toBe(true);
+        // Group 1 survives with 2 files, its totals recomputed
+        const group1 = filtered.find(g => g.hash === 'abc123def456789a');
+        expect(group1?.count).toBe(2);
+        expect(group1?.files.length).toBe(2);
+        expect(group1?.total_size).toBe(group1!.files.reduce((s, f) => s + f.size, 0));
+        // Group 2 collapsed to one file and is gone
+        expect(filtered.some(g => g.hash === 'def456789abc123b')).toBe(false);
+      });
+
+      it('an empty or absent excludePaths list keeps everything', async () => {
+        const baseline = await scanDirectory('/test/path');
+        const emptyList = await scanDirectory('/test/path', { excludePaths: [] });
+        const absent = await scanDirectory('/test/path', {});
+
+        expect(emptyList.files.length).toBe(baseline.files.length);
+        expect(absent.files.length).toBe(baseline.files.length);
+      });
+    });
+
     it('skipped compressions are remembered and excluded from the next scan until cleared', async () => {
       // A file whose compression produced no size reduction is remembered...
       await compressFilesInPlace(['/path/to/already-tiny.png'], ['WebP Converter']);

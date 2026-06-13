@@ -12,6 +12,7 @@
   let maxSize = $state('');
   let extensions = $state('');
   let filePattern = $state('');
+  let excludePaths = $state('');
 
   // Load persisted filter values on mount
   onMount(() => {
@@ -28,15 +29,23 @@
     if (currentFilter.filePattern) {
       filePattern = currentFilter.filePattern;
     }
+    if (currentFilter.excludePaths && currentFilter.excludePaths.length > 0) {
+      excludePaths = currentFilter.excludePaths.join('\n');
+    }
   });
 
   // Sync filter changes to global store
   $effect(() => {
+    const excluded = excludePaths
+      .split('\n')
+      .map(p => p.trim())
+      .filter(p => p);
     appState.setFilterConfig({
       minSize: minSize ? parseFloat(minSize) * 1024 * 1024 : undefined,
       maxSize: maxSize ? parseFloat(maxSize) * 1024 * 1024 : undefined,
       extensions: extensions ? extensions.split(',').map(e => e.trim()).filter(e => e) : undefined,
-      filePattern: filePattern || undefined
+      filePattern: filePattern || undefined,
+      excludePaths: excluded.length > 0 ? excluded : undefined
     });
   });
 
@@ -45,6 +54,7 @@
     maxSize = '';
     extensions = '';
     filePattern = '';
+    excludePaths = '';
     appState.clearFilters();
   }
 
@@ -54,6 +64,7 @@
     if (maxSize) count++;
     if (extensions) count++;
     if (filePattern) count++;
+    if (excludePaths.trim()) count++;
     return count;
   });
 </script>
@@ -125,6 +136,19 @@
           class="w-full px-2 py-1.5 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 focus:border-transparent"
         />
         <p class="mt-1 text-xs text-gray-500">Match files containing this text</p>
+      </div>
+
+      <!-- Exclude Paths Filter -->
+      <div>
+        <label for="excludePaths" class="block text-xs text-gray-600 mb-1">Exclude Paths (one per line)</label>
+        <textarea
+          id="excludePaths"
+          bind:value={excludePaths}
+          rows="3"
+          placeholder="e.g.&#10;/home/user/node_modules&#10;/home/user/.cache"
+          class="w-full px-2 py-1.5 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 focus:border-transparent font-mono"
+        ></textarea>
+        <p class="mt-1 text-xs text-gray-500">Files at or beneath these paths are skipped</p>
       </div>
 
       <!-- Quick Filter Presets -->
