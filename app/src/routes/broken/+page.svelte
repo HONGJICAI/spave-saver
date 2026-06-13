@@ -9,7 +9,7 @@
   let showDeleteConfirm = $state(false);
   let deleteInProgress = $state(false);
   let fixInProgress = $state(false);
-  let sortBy = $state<'name' | 'category' | 'size' | 'path'>('category');
+  let sortBy = $state<'name' | 'size' | 'path'>('name');
   let sortOrder = $state<'asc' | 'desc'>('asc');
 
   async function handleScan() {
@@ -43,21 +43,28 @@
     selectedPaths = next;
   }
 
-  function toggleAll() {
-    if (selectedPaths.size === sortedItems.length) {
-      selectedPaths = new Set();
-    } else {
-      selectedPaths = new Set(sortedItems.map((item) => item.path));
+  // Select-all that operates only on one section's rows, leaving the other
+  // section's selection untouched.
+  function toggleAllIn(items: BrokenFile[]) {
+    const next = new Set(selectedPaths);
+    const allSelected = items.length > 0 && items.every((i) => next.has(i.path));
+    for (const item of items) {
+      if (allSelected) {
+        next.delete(item.path);
+      } else {
+        next.add(item.path);
+      }
     }
+    selectedPaths = next;
   }
 
-  function clearSelection() {
-    selectedPaths = new Set();
+  function clearSelectionIn(items: BrokenFile[]) {
+    const next = new Set(selectedPaths);
+    for (const item of items) next.delete(item.path);
+    selectedPaths = next;
   }
 
   async function handleDelete() {
-    // Only corrupted files are deletable; misnamed files are renamed, never
-    // deleted (their content is valid).
     const targets = selectedCorrupted.map((b) => b.path);
     if (targets.length === 0) return;
 
@@ -104,7 +111,7 @@
     }
   }
 
-  function handleSort(column: 'name' | 'category' | 'size' | 'path') {
+  function handleSort(column: 'name' | 'size' | 'path') {
     if (sortBy === column) {
       sortOrder = sortOrder === 'asc' ? 'desc' : 'asc';
     } else {
@@ -124,32 +131,13 @@
     return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
   }
 
-  function categoryLabel(category: BrokenFile['category']): string {
-    return category === 'corrupted' ? 'Corrupted' : 'Wrong extension';
-  }
-
-  let corruptedCount = $derived(broken.filter((b) => b.category === 'corrupted').length);
-  let mismatchCount = $derived(broken.filter((b) => b.category === 'extension_mismatch').length);
-
-  // Selection split by category: corrupted files are deleted, misnamed files
-  // are renamed — never deleted, since their content is valid.
-  let selectedCorrupted = $derived(
-    broken.filter((b) => b.category === 'corrupted' && selectedPaths.has(b.path))
-  );
-  let selectedMismatch = $derived(
-    broken.filter((b) => b.category === 'extension_mismatch' && selectedPaths.has(b.path))
-  );
-
-  let sortedItems = $derived.by(() => {
-    const items = [...broken];
-    items.sort((a, b) => {
+  function sortList(items: BrokenFile[]): BrokenFile[] {
+    const sorted = [...items];
+    sorted.sort((a, b) => {
       let comparison = 0;
       switch (sortBy) {
         case 'name':
           comparison = getItemName(a.path).localeCompare(getItemName(b.path));
-          break;
-        case 'category':
-          comparison = a.category.localeCompare(b.category) || a.path.localeCompare(b.path);
           break;
         case 'size':
           comparison = a.size - b.size;
@@ -160,8 +148,15 @@
       }
       return sortOrder === 'asc' ? comparison : -comparison;
     });
-    return items;
-  });
+    return sorted;
+  }
+
+  // Corrupted files are deleted; misnamed files are renamed — never deleted,
+  // since their content is valid.
+  let corruptedItems = $derived(sortList(broken.filter((b) => b.category === 'corrupted')));
+  let mismatchItems = $derived(sortList(broken.filter((b) => b.category === 'extension_mismatch')));
+  let selectedCorrupted = $derived(corruptedItems.filter((b) => selectedPaths.has(b.path)));
+  let selectedMismatch = $derived(mismatchItems.filter((b) => selectedPaths.has(b.path)));
 </script>
 
 <div class="p-6">
@@ -194,48 +189,17 @@
     </button>
   </div>
 
-  {#if sortedItems.length > 0}
-    <div class="bg-white rounded-lg shadow p-6 mb-6">
-      <div class="flex justify-between items-center">
-        <div>
-          <h2 class="text-xl font-semibold">
-            Found {broken.length} broken file{broken.length !== 1 ? 's' : ''}
-          </h2>
-          <p class="text-gray-600 mt-1">
-            {corruptedCount} corrupted, {mismatchCount} with a wrong extension.
-            Corrupted files can be deleted; misnamed files are renamed to the correct extension, not deleted.
-          </p>
-        </div>
-        {#if selectedPaths.size > 0}
-          <div class="flex gap-2">
-            <button
-              onclick={clearSelection}
-              class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
-            >
-              Clear Selection ({selectedPaths.size})
-            </button>
-            {#if selectedMismatch.length > 0}
-              <button
-                onclick={handleFix}
-                disabled={fixInProgress}
-                class="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50"
-              >
-                {fixInProgress ? 'Renaming...' : `Fix Extension (${selectedMismatch.length})`}
-              </button>
-            {/if}
-            {#if selectedCorrupted.length > 0}
-              <button
-                onclick={() => (showDeleteConfirm = true)}
-                class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
-              >
-                Delete Corrupted ({selectedCorrupted.length})
-              </button>
-            {/if}
-          </div>
-        {/if}
-      </div>
-    </div>
+  {#snippet headerCell(label: string, column: 'name' | 'size' | 'path')}
+    <th
+      class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+      onclick={() => handleSort(column)}
+    >
+      {label}
+      {#if sortBy === column}<span class="ml-1">{sortOrder === 'asc' ? '↑' : '↓'}</span>{/if}
+    </th>
+  {/snippet}
 
+  {#snippet fileTable(items: BrokenFile[], showRenameHint: boolean)}
     <div class="bg-white rounded-lg shadow overflow-hidden">
       <table class="min-w-full divide-y divide-gray-200">
         <thead class="bg-gray-50">
@@ -243,46 +207,21 @@
             <th class="px-6 py-3 text-left">
               <input
                 type="checkbox"
-                checked={selectedPaths.size === sortedItems.length && sortedItems.length > 0}
-                onchange={toggleAll}
+                checked={items.length > 0 && items.every((i) => selectedPaths.has(i.path))}
+                onchange={() => toggleAllIn(items)}
                 class="rounded border-gray-300"
               />
             </th>
-            <th
-              class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-              onclick={() => handleSort('category')}
-            >
-              Issue
-              {#if sortBy === 'category'}<span class="ml-1">{sortOrder === 'asc' ? '↑' : '↓'}</span>{/if}
-            </th>
-            <th
-              class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-              onclick={() => handleSort('name')}
-            >
-              Name
-              {#if sortBy === 'name'}<span class="ml-1">{sortOrder === 'asc' ? '↑' : '↓'}</span>{/if}
-            </th>
-            <th
-              class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-              onclick={() => handleSort('size')}
-            >
-              Size
-              {#if sortBy === 'size'}<span class="ml-1">{sortOrder === 'asc' ? '↑' : '↓'}</span>{/if}
-            </th>
+            {@render headerCell('Name', 'name')}
+            {@render headerCell('Size', 'size')}
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
               Reason
             </th>
-            <th
-              class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-              onclick={() => handleSort('path')}
-            >
-              Path
-              {#if sortBy === 'path'}<span class="ml-1">{sortOrder === 'asc' ? '↑' : '↓'}</span>{/if}
-            </th>
+            {@render headerCell('Path', 'path')}
           </tr>
         </thead>
         <tbody class="bg-white divide-y divide-gray-200">
-          {#each sortedItems as item (item.path)}
+          {#each items as item (item.path)}
             <tr
               class="hover:bg-gray-50 cursor-pointer {selectedPaths.has(item.path) ? 'bg-blue-50' : ''}"
               onclick={() => toggleItem(item.path)}
@@ -297,17 +236,6 @@
                 />
               </td>
               <td class="px-6 py-4 whitespace-nowrap">
-                {#if item.category === 'corrupted'}
-                  <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                    {categoryLabel(item.category)}
-                  </span>
-                {:else}
-                  <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
-                    {categoryLabel(item.category)}
-                  </span>
-                {/if}
-              </td>
-              <td class="px-6 py-4 whitespace-nowrap">
                 <span class="text-sm font-medium text-gray-900">{getItemName(item.path)}</span>
               </td>
               <td class="px-6 py-4 whitespace-nowrap">
@@ -317,7 +245,7 @@
                 <span class="text-sm text-gray-700 truncate max-w-xs block" title={item.reason}>
                   {item.reason}
                 </span>
-                {#if item.category === 'extension_mismatch' && item.suggested_extension}
+                {#if showRenameHint && item.suggested_extension}
                   <span class="text-xs text-amber-700">→ rename to .{item.suggested_extension}</span>
                 {/if}
               </td>
@@ -331,7 +259,78 @@
         </tbody>
       </table>
     </div>
-  {:else if !loading}
+  {/snippet}
+
+  {#if corruptedItems.length > 0}
+    <div class="mb-8">
+      <div class="bg-white rounded-lg shadow p-6 mb-4">
+        <div class="flex justify-between items-center">
+          <div>
+            <h2 class="text-xl font-semibold">
+              Corrupted files ({corruptedItems.length})
+            </h2>
+            <p class="text-gray-600 mt-1">
+              Content can't be read as its format (truncated or damaged). These can be deleted.
+            </p>
+          </div>
+          {#if selectedCorrupted.length > 0}
+            <div class="flex gap-2">
+              <button
+                onclick={() => clearSelectionIn(corruptedItems)}
+                class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Clear ({selectedCorrupted.length})
+              </button>
+              <button
+                onclick={() => (showDeleteConfirm = true)}
+                class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+              >
+                Delete ({selectedCorrupted.length})
+              </button>
+            </div>
+          {/if}
+        </div>
+      </div>
+      {@render fileTable(corruptedItems, false)}
+    </div>
+  {/if}
+
+  {#if mismatchItems.length > 0}
+    <div class="mb-8">
+      <div class="bg-white rounded-lg shadow p-6 mb-4">
+        <div class="flex justify-between items-center">
+          <div>
+            <h2 class="text-xl font-semibold">
+              Wrong extension ({mismatchItems.length})
+            </h2>
+            <p class="text-gray-600 mt-1">
+              The content is valid but the file is misnamed. Rename to the matching extension — don't delete.
+            </p>
+          </div>
+          {#if selectedMismatch.length > 0}
+            <div class="flex gap-2">
+              <button
+                onclick={() => clearSelectionIn(mismatchItems)}
+                class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Clear ({selectedMismatch.length})
+              </button>
+              <button
+                onclick={handleFix}
+                disabled={fixInProgress}
+                class="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50"
+              >
+                {fixInProgress ? 'Renaming...' : `Fix Extension (${selectedMismatch.length})`}
+              </button>
+            </div>
+          {/if}
+        </div>
+      </div>
+      {@render fileTable(mismatchItems, true)}
+    </div>
+  {/if}
+
+  {#if broken.length === 0 && !loading}
     <div class="bg-white rounded-lg shadow p-12 text-center">
       <svg class="w-16 h-16 text-gray-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
