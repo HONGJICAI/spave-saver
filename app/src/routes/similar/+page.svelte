@@ -23,13 +23,22 @@
     potentialSavings,
     type KeepStrategy,
   } from '$lib/utils/similar';
+  import { loadFromSession, saveToSession, sessionKeys } from '$lib/utils/storage';
+
+  // Session-cached results so leaving and returning keeps the scan intact.
+  interface SimilarCache {
+    groups: SimilarGroup[];
+    hasScanned: boolean;
+    selected: string[];
+  }
+  const cached = loadFromSession<SimilarCache | null>(sessionKeys.SIMILAR_RESULT, null);
 
   let loading = $state(false);
   let error = $state('');
-  let hasScanned = $state(false);
-  let groups = $state<SimilarGroup[]>([]);
+  let hasScanned = $state(cached?.hasScanned ?? false);
+  let groups = $state<SimilarGroup[]>(cached?.groups ?? []);
   let threshold = $state(0.9);
-  let selected = $state<Set<string>>(new Set());
+  let selected = $state<Set<string>>(new Set(cached?.selected ?? []));
   let sortBy = $state<'similarity' | 'savings'>('similarity');
   let keepStrategy = $state<KeepStrategy>('resolution');
 
@@ -45,6 +54,14 @@
   let allowFullGroups = $state(false);
   let deleting = $state(false);
   let lastResults = $state<DeleteResult[] | null>(null);
+
+  $effect(() => {
+    saveToSession<SimilarCache>(sessionKeys.SIMILAR_RESULT, {
+      groups,
+      hasScanned,
+      selected: Array.from(selected),
+    });
+  });
 
   let sizeByPath = $derived.by(() => {
     const map = new Map<string, number>();
@@ -96,6 +113,7 @@
     }
 
     loading = true;
+    appState.setBusy(true);
     error = '';
     groups = [];
     selected = new Set();
@@ -109,6 +127,7 @@
       error = e instanceof Error ? e.message : 'Failed to find similar media';
     } finally {
       loading = false;
+      appState.setBusy(false);
     }
   }
 
@@ -135,6 +154,7 @@
 
   async function handleDelete() {
     deleting = true;
+    appState.setBusy(true);
     error = '';
     try {
       const results = await deleteFiles(Array.from(selected), deleteMode);
@@ -150,6 +170,7 @@
       error = e instanceof Error ? e.message : 'Failed to delete files';
     } finally {
       deleting = false;
+      appState.setBusy(false);
     }
   }
 

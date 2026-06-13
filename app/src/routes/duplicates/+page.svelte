@@ -11,13 +11,30 @@
     applyDeletions,
     type KeepStrategy,
   } from '$lib/utils/duplicates';
+  import { loadFromSession, saveToSession, sessionKeys } from '$lib/utils/storage';
+
+  // Session-cached results so leaving and returning keeps the scan intact.
+  interface DuplicatesCache {
+    duplicates: DuplicateGroup[];
+    hasScanned: boolean;
+    selected: string[];
+  }
+  const cached = loadFromSession<DuplicatesCache | null>(sessionKeys.DUPLICATES_RESULT, null);
 
   let loading = $state(false);
   let error = $state('');
-  let duplicates = $state<DuplicateGroup[]>([]);
-  let selected = $state<Set<string>>(new Set());
+  let duplicates = $state<DuplicateGroup[]>(cached?.duplicates ?? []);
+  let selected = $state<Set<string>>(new Set(cached?.selected ?? []));
   let sortBy = $state<'default' | 'size' | 'count'>('size');
-  let hasScanned = $state(false);
+  let hasScanned = $state(cached?.hasScanned ?? false);
+
+  $effect(() => {
+    saveToSession<DuplicatesCache>(sessionKeys.DUPLICATES_RESULT, {
+      duplicates,
+      hasScanned,
+      selected: Array.from(selected),
+    });
+  });
 
   // Delete flow
   let showConfirm = $state(false);
@@ -70,6 +87,7 @@
     }
 
     loading = true;
+    appState.setBusy(true);
     error = '';
     duplicates = [];
     selected = new Set();
@@ -83,6 +101,7 @@
       error = e instanceof Error ? e.message : 'Failed to find duplicates';
     } finally {
       loading = false;
+      appState.setBusy(false);
     }
   }
 
@@ -112,6 +131,7 @@
 
   async function handleDelete() {
     deleting = true;
+    appState.setBusy(true);
     error = '';
     try {
       const results = await deleteFiles(Array.from(selected), deleteMode);
@@ -127,6 +147,7 @@
       error = e instanceof Error ? e.message : 'Failed to delete files';
     } finally {
       deleting = false;
+      appState.setBusy(false);
     }
   }
 

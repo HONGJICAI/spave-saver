@@ -1,6 +1,7 @@
 <script lang="ts">
   import { appState } from '$lib/stores/app';
   import { findEmptyItems, deleteFiles } from '$lib/api';
+  import { loadFromSession, saveToSession, sessionKeys } from '$lib/utils/storage';
 
   type ItemKind = 'file' | 'folder';
   interface EmptyItem {
@@ -8,15 +9,33 @@
     kind: ItemKind;
   }
 
+  // Session-cached results so leaving and returning keeps the scan intact.
+  interface EmptyCache {
+    emptyFiles: string[];
+    emptyFolders: string[];
+    scanned: boolean;
+    selected: string[];
+  }
+  const cached = loadFromSession<EmptyCache | null>(sessionKeys.EMPTY_RESULT, null);
+
   let loading = $state(false);
-  let emptyFiles: string[] = $state([]);
-  let emptyFolders: string[] = $state([]);
-  let scanned = $state(false);
-  let selectedPaths = $state<Set<string>>(new Set());
+  let emptyFiles: string[] = $state(cached?.emptyFiles ?? []);
+  let emptyFolders: string[] = $state(cached?.emptyFolders ?? []);
+  let scanned = $state(cached?.scanned ?? false);
+  let selectedPaths = $state<Set<string>>(new Set(cached?.selected ?? []));
   let showDeleteConfirm = $state(false);
   let deleteInProgress = $state(false);
   let sortBy = $state<'name' | 'path' | 'type'>('name');
   let sortOrder = $state<'asc' | 'desc'>('asc');
+
+  $effect(() => {
+    saveToSession<EmptyCache>(sessionKeys.EMPTY_RESULT, {
+      emptyFiles,
+      emptyFolders,
+      scanned,
+      selected: Array.from(selectedPaths),
+    });
+  });
 
   async function handleScan() {
     // Use scanPaths
@@ -28,6 +47,7 @@
     }
 
     loading = true;
+    appState.setBusy(true);
     appState.setError(null);
 
     try {
@@ -40,6 +60,7 @@
       appState.setError(err instanceof Error ? err.message : 'Failed to find empty files and folders');
     } finally {
       loading = false;
+      appState.setBusy(false);
     }
   }
 
@@ -69,6 +90,7 @@
     if (selectedPaths.size === 0) return;
 
     deleteInProgress = true;
+    appState.setBusy(true);
     try {
       // Defaults to the system trash; only successfully removed items leave
       // the list. The backend refuses folders that gained files after the scan.
@@ -86,6 +108,7 @@
       $appState.error = err instanceof Error ? err.message : 'Failed to delete items';
     } finally {
       deleteInProgress = false;
+      appState.setBusy(false);
     }
   }
 

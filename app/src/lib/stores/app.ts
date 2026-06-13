@@ -12,7 +12,10 @@ export interface FilterConfig {
 
 export interface AppState {
   scanPaths: string[]; // Multiple paths for scanning
-  isScanning: boolean;
+  // True while any long-running operation (scan, delete, fix, compress) is in
+  // flight. The layout uses this to block navigation so a stray sidebar click
+  // can't unmount a page mid-operation and lose its progress.
+  busy: boolean;
   error: string | null;
   mode: 'web' | 'tauri';
   filterConfig: FilterConfig;
@@ -27,7 +30,7 @@ function createAppStore() {
   
   const { subscribe, set, update } = writable<AppState>({
     scanPaths: persistedPaths,
-    isScanning: false,
+    busy: false,
     error: null,
     mode,
     filterConfig: persistedFilters
@@ -61,7 +64,7 @@ function createAppStore() {
       saveToStorage(storageKeys.SCAN_PATHS, []);
       return { ...state, scanPaths: [] };
     }),
-    setScanning: (isScanning: boolean) => update(state => ({ ...state, isScanning })),
+    setBusy: (busy: boolean) => update(state => ({ ...state, busy })),
     setError: (error: string | null) => update(state => ({ ...state, error })),
     setFilterConfig: (filterConfig: FilterConfig) => update(state => {
       saveToStorage(storageKeys.FILTER_CONFIG, filterConfig);
@@ -82,7 +85,7 @@ function createAppStore() {
       saveToStorage(storageKeys.FILTER_CONFIG, {});
       set({
         scanPaths: [],
-        isScanning: false,
+        busy: false,
         error: null,
         mode,
         filterConfig: {}

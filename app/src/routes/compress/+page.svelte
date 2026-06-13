@@ -14,7 +14,14 @@
     type RejectedFile,
     type InPlaceCompressionResult,
   } from "$lib/api";
-  import { loadFromStorage, saveToStorage, storageKeys } from "$lib/utils/storage";
+  import {
+    loadFromStorage,
+    saveToStorage,
+    loadFromSession,
+    saveToSession,
+    storageKeys,
+    sessionKeys,
+  } from "$lib/utils/storage";
   import PluginSelector from "./PluginSelector.svelte";
   import StepIndicator from "./StepIndicator.svelte";
   import ScanStep from "./ScanStep.svelte";
@@ -28,14 +35,28 @@
     backup?: boolean;
   }
 
+  // Session-cached workflow state so navigating away from a multi-step
+  // compression flow and back restores the scan, selection, step, and results.
+  // Plugin config (availablePlugins/activePlugins) is reloaded fresh in onMount,
+  // so it is intentionally not part of this cache.
+  type Step = 'scan' | 'confirm' | 'process';
+  interface CompressCache {
+    compressibleFiles: CompressibleFile[];
+    rejectedFiles: RejectedFile[];
+    selectedFiles: string[];
+    compressionResults: InPlaceCompressionResult[];
+    currentStep: Step;
+  }
+  const cachedWorkflow = loadFromSession<CompressCache | null>(sessionKeys.COMPRESS_RESULT, null);
+
   let availablePlugins = $state<CompressionPlugin[]>([]);
   let activePlugins = $state<Set<string>>(new Set());
   let scanning = $state(false);
-  let compressibleFiles = $state<CompressibleFile[]>([]);
-  let rejectedFiles = $state<RejectedFile[]>([]);
-  let selectedFiles = $state<Set<string>>(new Set());
+  let compressibleFiles = $state<CompressibleFile[]>(cachedWorkflow?.compressibleFiles ?? []);
+  let rejectedFiles = $state<RejectedFile[]>(cachedWorkflow?.rejectedFiles ?? []);
+  let selectedFiles = $state<Set<string>>(new Set(cachedWorkflow?.selectedFiles ?? []));
   let compressing = $state(false);
-  let compressionResults = $state<InPlaceCompressionResult[]>([]);
+  let compressionResults = $state<InPlaceCompressionResult[]>(cachedWorkflow?.compressionResults ?? []);
 
   // Worker pool configuration
   let poolSize = $state(2);
@@ -44,9 +65,18 @@
   let totalToProcess = $state(0);
   let currentlyProcessing = $state<string[]>([]);
 
-  // Step management
-  type Step = 'scan' | 'confirm' | 'process';
-  let currentStep = $state<Step>('scan');
+  // Step management (Step type declared above with the session cache)
+  let currentStep = $state<Step>(cachedWorkflow?.currentStep ?? 'scan');
+
+  $effect(() => {
+    saveToSession<CompressCache>(sessionKeys.COMPRESS_RESULT, {
+      compressibleFiles,
+      rejectedFiles,
+      selectedFiles: Array.from(selectedFiles),
+      compressionResults,
+      currentStep,
+    });
+  });
 
   let compressedCount = $derived(compressionResults.filter(r => r.status === 'compressed').length);
   let skippedCount = $derived(compressionResults.filter(r => r.status === 'skipped').length);
@@ -184,6 +214,7 @@
       return;
     }
     scanning = true;
+    appState.setBusy(true);
     $appState.error = null;
     compressibleFiles = [];
     rejectedFiles = [];
@@ -201,6 +232,7 @@
       $appState.error = err instanceof Error ? err.message : "Failed to scan files";
     } finally {
       scanning = false;
+      appState.setBusy(false);
     }
   }
 
@@ -230,6 +262,7 @@
 
     currentStep = 'process';
     compressing = true;
+    appState.setBusy(true);
     $appState.error = null;
     compressionResults = [];
     processedCount = 0;
@@ -280,6 +313,7 @@
       $appState.error = err instanceof Error ? err.message : "Failed to compress files";
     } finally {
       compressing = false;
+      appState.setBusy(false);
       currentlyProcessing = [];
       refreshSkipCacheInfo();
     }

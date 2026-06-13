@@ -1,5 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { loadFromStorage, saveToStorage, removeFromStorage, storageKeys } from './storage';
+import {
+  loadFromStorage,
+  saveToStorage,
+  removeFromStorage,
+  loadFromSession,
+  saveToSession,
+  removeFromSession,
+  storageKeys,
+  sessionKeys,
+} from './storage';
 
 describe('storage utilities', () => {
   beforeEach(() => {
@@ -122,6 +131,69 @@ describe('storage utilities', () => {
 
     it('should have the correct key for filter config', () => {
       expect(storageKeys.FILTER_CONFIG).toBe('space-saver:filterConfig');
+    });
+  });
+
+  describe('session storage', () => {
+    beforeEach(() => {
+      sessionStorage.clear();
+    });
+
+    it('should save and load values via sessionStorage', () => {
+      const payload = { results: [1, 2, 3], hasScanned: true };
+      saveToSession('session-key', payload);
+      expect(sessionStorage.getItem('session-key')).toBe(JSON.stringify(payload));
+      expect(loadFromSession('session-key', null)).toEqual(payload);
+    });
+
+    it('should not leak into localStorage', () => {
+      saveToSession('isolated-key', 'session-only');
+      expect(localStorage.getItem('isolated-key')).toBeNull();
+    });
+
+    it('should return the default value when the key is missing', () => {
+      expect(loadFromSession('missing', 'fallback')).toBe('fallback');
+    });
+
+    it('should return the default value on parse error', () => {
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      sessionStorage.setItem('broken', 'not json');
+      expect(loadFromSession('broken', 'fallback')).toBe('fallback');
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Error loading from sessionStorage'),
+        expect.any(Error)
+      );
+      consoleErrorSpy.mockRestore();
+    });
+
+    it('should remove items from sessionStorage', () => {
+      sessionStorage.setItem('to-remove', 'value');
+      removeFromSession('to-remove');
+      expect(sessionStorage.getItem('to-remove')).toBeNull();
+    });
+
+    it('should handle save errors gracefully', () => {
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const mockStorage = vi.spyOn(window.sessionStorage, 'setItem').mockImplementation(() => {
+        throw new Error('Storage error');
+      });
+      saveToSession('key', 'value');
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Error saving to sessionStorage'),
+        expect.any(Error)
+      );
+      consoleErrorSpy.mockRestore();
+      mockStorage.mockRestore();
+    });
+  });
+
+  describe('sessionKeys', () => {
+    it('should expose a distinct session key per scan page', () => {
+      const keys = Object.values(sessionKeys);
+      expect(new Set(keys).size).toBe(keys.length);
+      for (const key of keys) {
+        expect(key.startsWith('space-saver:session:')).toBe(true);
+      }
     });
   });
 });
