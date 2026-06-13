@@ -17,6 +17,9 @@ pub struct FilterConfig {
     pub extensions: Option<Vec<String>>,
     /// Pattern to match in filename
     pub file_pattern: Option<String>,
+    /// Paths to exclude; files located at or beneath any of these are dropped
+    /// from results (component-wise prefix match)
+    pub exclude_paths: Option<Vec<String>>,
 }
 
 impl FilterConfig {
@@ -48,6 +51,14 @@ impl FilterConfig {
         if let Some(ref pattern) = self.file_pattern {
             if !pattern.is_empty() {
                 let filter = FileFilter::pattern(pattern.clone());
+                filtered = filter.filter_files(filtered);
+            }
+        }
+
+        // Apply exclude paths filter
+        if let Some(ref exclude_paths) = self.exclude_paths {
+            if !exclude_paths.is_empty() {
+                let filter = FileFilter::exclude_paths(exclude_paths.clone());
                 filtered = filter.filter_files(filtered);
             }
         }
@@ -726,6 +737,7 @@ mod tests {
             max_size: None,
             extensions: Some(vec!["log".to_string()]),
             file_pattern: None,
+            exclude_paths: None,
         };
         let result = api
             .find_empty_in_paths(vec![dir.path().to_path_buf()], Some(filter))
@@ -740,6 +752,103 @@ mod tests {
         assert_eq!(
             result.empty_folders,
             vec![dir.path().join("hollow").to_string_lossy().to_string()]
+        );
+    }
+
+    #[test]
+    fn test_filter_config_apply_exclude_paths() {
+        use space_saver_core::scanner::{FileInfo, FileType};
+        use std::path::PathBuf;
+
+        let make = |p: &str| FileInfo {
+            path: PathBuf::from(p),
+            size: 100,
+            modified: 0,
+            file_type: FileType::Other,
+            hash: None,
+        };
+
+        let filter = FilterConfig {
+            min_size: None,
+            max_size: None,
+            extensions: None,
+            file_pattern: None,
+            exclude_paths: Some(vec!["/data/node_modules".to_string()]),
+        };
+
+        let kept = filter.apply(vec![
+            make("/data/node_modules/dep/index.js"),
+            make("/data/src/main.rs"),
+            // A sibling sharing a name prefix must not be excluded
+            make("/data/node_modules_backup/x.js"),
+        ]);
+
+        let paths: Vec<String> = kept
+            .iter()
+            .map(|f| f.path.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                "/data/src/main.rs".to_string(),
+                "/data/node_modules_backup/x.js".to_string(),
+            ]
+        );
+
+        // An empty exclude list keeps everything
+        let noop = FilterConfig {
+            exclude_paths: Some(vec![]),
+            ..Default::default()
+        };
+        assert_eq!(noop.apply(vec![make("/data/a.txt")]).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_scan_directories_exclude_paths() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("keep.txt"), b"keep").unwrap();
+        fs::create_dir(dir.path().join("skip")).unwrap();
+        fs::write(dir.path().join("skip").join("ignored.txt"), b"nope").unwrap();
+
+        let api = ServiceApi::new();
+        let filter = FilterConfig {
+            exclude_paths: Some(vec![dir.path().join("skip").to_string_lossy().to_string()]),
+            ..Default::default()
+        };
+
+        let results = api
+            .scan_directories(vec![dir.path().to_path_buf()], Some(filter))
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].file_count, 1);
+        assert!(results[0].files[0].path.ends_with("keep.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_find_duplicates_with_exclude_paths() {
+        let dir = TempDir::new().unwrap();
+        // Two copies of the same content in different subtrees
+        fs::create_dir(dir.path().join("a")).unwrap();
+        fs::create_dir(dir.path().join("b")).unwrap();
+        fs::write(dir.path().join("a").join("dup.bin"), b"same content").unwrap();
+        fs::write(dir.path().join("b").join("dup.bin"), b"same content").unwrap();
+
+        let api = ServiceApi::new();
+
+        // Excluding one copy's directory leaves a single file, so no group forms
+        let filter = FilterConfig {
+            exclude_paths: Some(vec![dir.path().join("b").to_string_lossy().to_string()]),
+            ..Default::default()
+        };
+        let groups = api
+            .find_duplicates_in_paths(vec![dir.path().to_path_buf()], Some(filter))
+            .await
+            .unwrap();
+        assert!(
+            groups.is_empty(),
+            "excluding one copy must break the duplicate group"
         );
     }
 
@@ -817,6 +926,7 @@ mod tests {
             max_size: None,
             extensions: None,
             file_pattern: None,
+            exclude_paths: None,
         };
 
         let duplicates = api
@@ -871,6 +981,7 @@ mod tests {
             max_size: Some(1_000),
             extensions: None,
             file_pattern: None,
+            exclude_paths: None,
         };
 
         let duplicates = api
@@ -921,6 +1032,7 @@ mod tests {
             max_size: None,
             extensions: Some(vec!["txt".to_string()]),
             file_pattern: None,
+            exclude_paths: None,
         };
 
         let duplicates = api
@@ -974,6 +1086,7 @@ mod tests {
             max_size: None,
             extensions: None,
             file_pattern: Some("report".to_string()),
+            exclude_paths: None,
         };
 
         let duplicates = api
@@ -1036,6 +1149,7 @@ mod tests {
             max_size: None,
             extensions: Some(vec!["txt".to_string()]),
             file_pattern: None,
+            exclude_paths: None,
         };
 
         let duplicates = api
@@ -1155,6 +1269,7 @@ mod tests {
             max_size: None,
             extensions: Some(vec!["jpg".to_string()]),
             file_pattern: None,
+            exclude_paths: None,
         };
         let broken = api
             .find_broken_files_in_paths(vec![dir.path().to_path_buf()], Some(filter))

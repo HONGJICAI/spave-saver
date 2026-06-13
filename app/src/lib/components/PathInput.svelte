@@ -1,20 +1,33 @@
 <script lang="ts">
   import { appState } from '$lib/stores/app';
-  import type { PathValidationResult } from '$lib/utils/path';
+  import { validatePath, type PathValidationResult } from '$lib/utils/path';
 
   interface Props {
     onPathAdded?: (path: string, hasSubpaths: string[]) => void;
+    /**
+     * Paths to validate against (duplicate / subpath-redundancy checks). When
+     * omitted, validation runs against the global scan paths — the original
+     * behavior, so existing Scan Paths usage is unchanged.
+     */
+    existingPaths?: string[];
+    placeholder?: string;
   }
-  
-  let { onPathAdded }: Props = $props();
+
+  let { onPathAdded, existingPaths, placeholder = 'Add directory path...' }: Props = $props();
 
   let inputPath = $state('');
   let pathValidation = $state<PathValidationResult | null>(null);
 
+  function validate(path: string): PathValidationResult {
+    return existingPaths !== undefined
+      ? validatePath(path, existingPaths)
+      : appState.validatePath(path);
+  }
+
   // Validate path as user types
   $effect(() => {
     if (inputPath.trim()) {
-      pathValidation = appState.validatePath(inputPath.trim());
+      pathValidation = validate(inputPath.trim());
     } else {
       pathValidation = null;
     }
@@ -29,7 +42,7 @@
           directory: true,
           multiple: true,
         });
-        
+
         if (selected) {
           const pathsToProcess = Array.isArray(selected) ? selected : [selected];
           pathsToProcess.forEach(path => handlePathSelection(path));
@@ -50,8 +63,8 @@
   }
 
   function handlePathSelection(path: string) {
-    const validation = appState.validatePath(path);
-    
+    const validation = validate(path);
+
     if (validation.isValid || (validation.hasSubpaths.length > 0 && !validation.isDuplicate && validation.isSubpathOf.length === 0)) {
       onPathAdded?.(path, validation.hasSubpaths);
     } else {
@@ -67,7 +80,7 @@
       type="text"
       bind:value={inputPath}
       onkeydown={(e) => e.key === 'Enter' && handleAddPath()}
-      placeholder="Add directory path..."
+      {placeholder}
       class="w-full px-3 py-2 text-sm border-2 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
       class:border-gray-300={!pathValidation || (pathValidation.isValid && pathValidation.warnings.length === 0)}
       class:border-yellow-400={pathValidation && pathValidation.warnings.length > 0 && !pathValidation.isDuplicate && pathValidation.isSubpathOf.length === 0}

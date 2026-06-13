@@ -75,6 +75,7 @@
     if (filter.maxSize) count++;
     if (filter.extensions && filter.extensions.length > 0) count++;
     if (filter.filePattern) count++;
+    if (filter.excludePaths && filter.excludePaths.length > 0) count++;
     return count;
   });
 </script>

@@ -1,5 +1,6 @@
 use crate::scanner::FileInfo;
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 /// File filter trait
 pub trait Filter {
@@ -82,6 +83,38 @@ impl Filter for PatternFilter {
         } else {
             false
         }
+    }
+}
+
+/// Filter that excludes files located under any of the given paths.
+///
+/// A file is excluded (dropped) when its path equals, or is nested beneath,
+/// one of the exclude paths. Matching is component-wise (via
+/// `Path::starts_with`), so excluding `/home/a` does not exclude `/home/abc`.
+/// An empty exclude list keeps everything.
+pub struct ExcludePathsFilter {
+    exclude_paths: Vec<PathBuf>,
+}
+
+impl ExcludePathsFilter {
+    pub fn new(paths: Vec<String>) -> Self {
+        Self {
+            exclude_paths: paths
+                .into_iter()
+                .filter(|p| !p.is_empty())
+                .map(PathBuf::from)
+                .collect(),
+        }
+    }
+}
+
+impl Filter for ExcludePathsFilter {
+    fn apply(&self, file: &FileInfo) -> bool {
+        // Keep the file only if it is not under any excluded path
+        !self
+            .exclude_paths
+            .iter()
+            .any(|excluded| file.path.starts_with(excluded))
     }
 }
 
@@ -202,6 +235,10 @@ impl FileFilter {
         Self::new(Box::new(PatternFilter::new(pattern)))
     }
 
+    pub fn exclude_paths(paths: Vec<String>) -> Self {
+        Self::new(Box::new(ExcludePathsFilter::new(paths)))
+    }
+
     pub fn empty_files() -> Self {
         Self::new(Box::new(EmptyFileFilter))
     }
@@ -275,6 +312,53 @@ mod tests {
 
         assert!(filter.apply(&file1));
         assert!(!filter.apply(&file2));
+    }
+
+    #[test]
+    fn test_exclude_paths_filter() {
+        let filter = ExcludePathsFilter::new(vec![
+            "/home/user/node_modules".to_string(),
+            "/home/user/.cache".to_string(),
+        ]);
+
+        // A file directly under an excluded directory is dropped
+        let nested = create_test_file("/home/user/node_modules/dep/index.js", 100);
+        assert!(!filter.apply(&nested));
+
+        // A file at the excluded path itself is dropped
+        let exact = create_test_file("/home/user/.cache", 100);
+        assert!(!filter.apply(&exact));
+
+        // An unrelated file is kept
+        let kept = create_test_file("/home/user/Documents/report.pdf", 100);
+        assert!(filter.apply(&kept));
+
+        // Matching is component-wise: a sibling sharing a name prefix is kept
+        let sibling = create_test_file("/home/user/node_modules_backup/x.js", 100);
+        assert!(filter.apply(&sibling));
+    }
+
+    #[test]
+    fn test_exclude_paths_filter_empty_keeps_everything() {
+        // No exclude paths (and blank entries are ignored) keeps all files
+        let filter = ExcludePathsFilter::new(vec![]);
+        let file = create_test_file("/any/file.txt", 100);
+        assert!(filter.apply(&file));
+
+        let blank = ExcludePathsFilter::new(vec![String::new()]);
+        assert!(blank.apply(&file));
+    }
+
+    #[test]
+    fn test_file_filter_exclude_paths_helper() {
+        let filter = FileFilter::exclude_paths(vec!["/tmp/skip".to_string()]);
+        let files = vec![
+            create_test_file("/tmp/skip/a.txt", 1),
+            create_test_file("/tmp/keep/b.txt", 1),
+        ];
+        let kept = filter.filter_files(files);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].path, PathBuf::from("/tmp/keep/b.txt"));
     }
 
     #[test]

@@ -20,6 +20,19 @@ import { mockDetectTools } from "../../mock/tools";
 // Check if running in Tauri environment
 const isTauri = "__TAURI_INTERNALS__" in window;
 
+/**
+ * Whether a path sits at or beneath one of the excluded paths. Mirrors the
+ * backend's ExcludePathsFilter (component-wise prefix match), so excluding
+ * "/a/b" drops "/a/b" and "/a/b/c" but not the sibling "/a/bc".
+ */
+function isExcludedPath(path: string, excludePaths?: string[]): boolean {
+  if (!excludePaths || excludePaths.length === 0) return false;
+  return excludePaths.some((raw) => {
+    const ex = raw.replace(/\/+$/, "");
+    return ex.length > 0 && (path === ex || path.startsWith(ex + "/"));
+  });
+}
+
 export { type ScanResult, type DuplicateGroup, type SimilarGroup, type SimilarFile, type MediaKind, type StorageStats, type FileInfo, type FilterConfig, type EmptyScanResult, type BrokenFile, type BrokenCategory, type FixExtensionResult, type AppConfig, type ScanConfig, type HashAlgorithm, type ToolStatus };
 
 /**
@@ -29,7 +42,18 @@ export async function scanDirectories(paths: string[], filter?: FilterConfig): P
   if (isTauri) {
     return await invoke<ScanResult[]>("scan", { paths, filter: filter || null });
   } else {
-    return await Promise.all(paths.map(path => mockScanResult(path)));
+    const results = await Promise.all(paths.map(path => mockScanResult(path)));
+    // Mirror the backend's exclude-paths filter so Web mode can demo it: drop
+    // excluded files and recompute the per-directory totals.
+    return results.map(result => {
+      const files = result.files.filter(f => !isExcludedPath(f.path, filter?.excludePaths));
+      return {
+        ...result,
+        files,
+        file_count: files.length,
+        total_size: files.reduce((sum, f) => sum + f.size, 0),
+      };
+    });
   }
 }
 
@@ -49,7 +73,20 @@ export async function findDuplicates(paths: string[], filter?: FilterConfig): Pr
     return await invoke<DuplicateGroup[]>("duplicate_file_check", { paths, filter: filter || null });
   } else {
     const results = await Promise.all(paths.map(path => mockFindDuplicates(path)));
-    return results.flat();
+    // Drop excluded files; a group needs >1 file to remain a duplicate group,
+    // matching the backend (totals/wasted space recomputed from what's left).
+    return results.flat().flatMap(group => {
+      const files = group.files.filter(f => !isExcludedPath(f.path, filter?.excludePaths));
+      if (files.length < 2) return [];
+      const total_size = files.reduce((sum, f) => sum + f.size, 0);
+      return [{
+        ...group,
+        files,
+        count: files.length,
+        total_size,
+        wasted_space: total_size - files[0].size,
+      }];
+    });
   }
 }
 
@@ -76,7 +113,11 @@ export async function findSimilarMedia(
     const results = await Promise.all(
       paths.map(path => mockFindSimilarMedia(path, threshold, mediaTypes))
     );
-    return results.flat();
+    // Drop excluded files; a similar group needs >1 file to remain meaningful
+    return results.flat().flatMap(group => {
+      const files = group.files.filter(f => !isExcludedPath(f.path, filter?.excludePaths));
+      return files.length < 2 ? [] : [{ ...group, files }];
+    });
   }
 }
 
@@ -102,9 +143,10 @@ export async function findEmptyItems(paths: string[], filter?: FilterConfig): Pr
     return await invoke<EmptyScanResult>("empty_folder_check", { paths, filter: filter || null });
   } else {
     const results = await Promise.all(paths.map(path => mockEmptyItems(path)));
+    // Excluded paths drop both empty files and empty folders beneath them
     return {
-      empty_files: results.flatMap(r => r.empty_files),
-      empty_folders: results.flatMap(r => r.empty_folders),
+      empty_files: results.flatMap(r => r.empty_files).filter(p => !isExcludedPath(p, filter?.excludePaths)),
+      empty_folders: results.flatMap(r => r.empty_folders).filter(p => !isExcludedPath(p, filter?.excludePaths)),
     };
   }
 }
@@ -119,7 +161,7 @@ export async function findBrokenFiles(paths: string[], filter?: FilterConfig): P
     return await invoke<BrokenFile[]>("broken_file_check", { paths, filter: filter || null });
   } else {
     const results = await Promise.all(paths.map(path => mockFindBroken(path)));
-    return results.flat();
+    return results.flat().filter(b => !isExcludedPath(b.path, filter?.excludePaths));
   }
 }
 

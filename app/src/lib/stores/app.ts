@@ -3,10 +3,11 @@ import { loadFromStorage, saveToStorage, storageKeys } from '$lib/utils/storage'
 import { validatePath, type PathValidationResult } from '$lib/utils/path';
 
 export interface FilterConfig {
-  minSize?: number;      // in bytes
-  maxSize?: number;      // in bytes
-  extensions?: string[]; // array of extensions
-  filePattern?: string;  // pattern to match in filename
+  minSize?: number;       // in bytes
+  maxSize?: number;       // in bytes
+  extensions?: string[];  // array of extensions
+  filePattern?: string;   // pattern to match in filename
+  excludePaths?: string[]; // paths to exclude (files at or beneath are dropped)
 }
 
 export interface AppState {
