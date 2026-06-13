@@ -69,6 +69,24 @@ export interface BrokenFile {
   category: BrokenCategory;
   /** Human-readable explanation, worded close to the backend's error */
   reason: string;
+  /**
+   * For an extension mismatch, the extension matching the real content
+   * (e.g. "pdf"), so the file can be renamed instead of deleted. Null for
+   * corruption.
+   */
+  suggested_extension?: string | null;
+}
+
+/**
+ * Per-file outcome of fixing a file's extension (renaming to match content)
+ */
+export interface FixExtensionResult {
+  /** The original path that was asked to be fixed */
+  path: string;
+  success: boolean;
+  /** The new path after renaming, when successful */
+  new_path?: string | null;
+  error?: string | null;
 }
 
 /**

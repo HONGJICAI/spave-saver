@@ -17,6 +17,7 @@ pub fn run() {
             duplicate_file_check,
             similar_file_check,
             broken_file_check,
+            fix_file_extensions,
             delete_files,
             get_storage_stats,
             get_compression_plugins,

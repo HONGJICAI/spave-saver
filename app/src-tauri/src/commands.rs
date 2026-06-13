@@ -10,7 +10,7 @@ use space_saver_service::api::{
     StorageStats,
 };
 use space_saver_service::ServiceApi;
-use space_saver_service::{DeleteMode, DeleteResult, FileOperations};
+use space_saver_service::{DeleteMode, DeleteResult, FileOperations, FixExtensionResult};
 
 /// Remembers files a plugin already failed to shrink at a given quality so
 /// scans can exclude them. Keyed by (path, plugin, quality), guarded by a
@@ -141,6 +141,18 @@ pub async fn broken_file_check(
     api.find_broken_files_in_paths(paths, filter)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Rename misnamed files (whose content does not match their extension) to the
+/// extension matching their real content, reporting a per-file outcome. This
+/// is the safe action for `extension_mismatch` results from `broken_file_check`
+/// — the file is valid, just named wrong, so it is renamed rather than deleted.
+#[tauri::command]
+pub async fn fix_file_extensions(paths: Vec<String>) -> Result<Vec<FixExtensionResult>, String> {
+    let ops = FileOperations::new();
+    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+
+    Ok(ops.fix_extensions(&paths))
 }
 
 /// Delete files, reporting a per-file outcome. `mode` defaults to "trash"
@@ -866,6 +878,39 @@ mod tests {
         assert!(broken.iter().any(|b| b.path.ends_with("truncated.jpg")));
         assert!(broken.iter().any(|b| b.path.ends_with("fake.png")));
         assert!(broken.iter().all(|b| !b.reason.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn fix_file_extensions_renames_misnamed_file() {
+        let dir = tempfile::tempdir().unwrap();
+        // PDF bytes wearing a .jpg extension
+        let path = dir.path().join("scan.jpg");
+        fs::write(&path, b"%PDF-1.7\nbody").unwrap();
+
+        let results = fix_file_extensions(vec![path.to_string_lossy().to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].success);
+        assert!(results[0].new_path.as_ref().unwrap().ends_with("scan.pdf"));
+        assert!(!path.exists());
+        assert!(dir.path().join("scan.pdf").exists());
+    }
+
+    #[tokio::test]
+    async fn fix_file_extensions_reports_failure_for_unrecognized_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("junk.jpg");
+        fs::write(&path, b"not a recognizable format").unwrap();
+
+        let results = fix_file_extensions(vec![path.to_string_lossy().to_string()])
+            .await
+            .unwrap();
+
+        assert!(!results[0].success);
+        assert!(results[0].error.is_some());
+        assert!(path.exists(), "file untouched when nothing to fix");
     }
 
     #[tokio::test]

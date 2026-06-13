@@ -35,6 +35,10 @@ pub struct BrokenReason {
     /// Human-readable explanation, worded close to the underlying error so it
     /// can be shown directly in the UI.
     pub detail: String,
+    /// For `ExtensionMismatch`, the extension matching the actual content
+    /// (e.g. `pdf` for a PDF named `.jpg`), so the UI can offer to rename
+    /// instead of delete. `None` for corruption.
+    pub suggested_extension: Option<String>,
 }
 
 impl BrokenReason {
@@ -42,13 +46,17 @@ impl BrokenReason {
         Self {
             category: BrokenCategory::Corrupted,
             detail: detail.into(),
+            suggested_extension: None,
         }
     }
 
-    fn extension_mismatch(detail: impl Into<String>) -> Self {
+    /// `actual` is the canonical format name sniffed from the content;
+    /// `ext` is the (wrong) extension the file currently carries.
+    fn extension_mismatch(actual: &'static str, ext: &str) -> Self {
         Self {
             category: BrokenCategory::ExtensionMismatch,
-            detail: detail.into(),
+            detail: format!("Content looks like {actual} but the extension is .{ext}"),
+            suggested_extension: Some(canonical_extension(actual).to_string()),
         }
     }
 }
@@ -87,9 +95,7 @@ impl BrokenFileChecker {
             // The bytes match a known format other than the one the extension
             // claims: the file is misnamed (it may still be valid content).
             Some(actual) if actual != declared => {
-                return Some(BrokenReason::extension_mismatch(format!(
-                    "Content looks like {actual} but the extension is .{ext}"
-                )));
+                return Some(BrokenReason::extension_mismatch(actual, &ext));
             }
             // Signature matches the extension: fall through to deep validation.
             Some(_) => {}
@@ -133,6 +139,53 @@ fn declared_format(ext: &str) -> Option<&'static str> {
         "gz" | "gzip" => Some("gzip"),
         "mp4" | "m4v" | "mov" => Some("mp4"),
         _ => None,
+    }
+}
+
+/// The preferred file extension for a canonical format name. Takes a
+/// `'static` name because every caller passes a sniffed/declared format
+/// literal, letting the unknown-format arm fall back to the name itself.
+fn canonical_extension(format: &'static str) -> &'static str {
+    match format {
+        "jpeg" => "jpg",
+        "png" => "png",
+        "gif" => "gif",
+        "bmp" => "bmp",
+        "webp" => "webp",
+        "pdf" => "pdf",
+        "zip" => "zip",
+        "gzip" => "gz",
+        "mp4" => "mp4",
+        // Unknown format names are returned unchanged.
+        other => other,
+    }
+}
+
+/// The extension matching a file's actual content, sniffed from its leading
+/// bytes. Returns `None` when the content is not a format we recognize.
+pub fn detected_extension(path: &Path) -> Option<&'static str> {
+    let header = read_header(path, 32)?;
+    sniff_format(&header).map(canonical_extension)
+}
+
+/// The extension a misnamed file *should* have, or `None` when there is
+/// nothing to fix — either the content is unrecognized, or the current
+/// extension already matches it (after normalizing aliases like `jpeg`/`jpg`).
+/// Used to safely rename a file to match its real content.
+pub fn extension_fix_for(path: &Path) -> Option<&'static str> {
+    let detected = detected_extension(path)?;
+    let current = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    // Normalize the current extension to its canonical format before comparing
+    // so e.g. a `.jpeg` holding JPEG bytes is not treated as needing a fix.
+    let current_canonical = declared_format(&current).map(canonical_extension);
+    if current_canonical == Some(detected) {
+        None
+    } else {
+        Some(detected)
     }
 }
 
@@ -312,6 +365,75 @@ mod tests {
 
         let reason = check(&path).expect("misnamed webp must be flagged");
         assert_eq!(reason.category, BrokenCategory::ExtensionMismatch);
+    }
+
+    #[test]
+    fn mismatch_suggests_the_correct_extension() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("photo.jpg");
+        fs::write(&path, b"%PDF-1.7\n%fake pdf body").unwrap();
+
+        let reason = check(&path).unwrap();
+        assert_eq!(reason.suggested_extension.as_deref(), Some("pdf"));
+    }
+
+    #[test]
+    fn corrupted_has_no_suggested_extension() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("truncated.jpg");
+        fs::write(&path, [0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
+
+        let reason = check(&path).unwrap();
+        assert_eq!(reason.category, BrokenCategory::Corrupted);
+        assert_eq!(reason.suggested_extension, None);
+    }
+
+    #[test]
+    fn detected_extension_reads_real_format() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("misnamed.jpg");
+        fs::write(&path, b"%PDF-1.7\nbody").unwrap();
+
+        assert_eq!(detected_extension(&path), Some("pdf"));
+    }
+
+    #[test]
+    fn detected_extension_none_for_unrecognized_content() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("mystery.bin");
+        fs::write(&path, b"\x00\x01\x02not a known signature").unwrap();
+
+        assert_eq!(detected_extension(&path), None);
+    }
+
+    #[test]
+    fn extension_fix_for_suggests_rename_target() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("scan.jpg");
+        fs::write(&path, b"%PDF-1.7\nbody").unwrap();
+
+        assert_eq!(extension_fix_for(&path), Some("pdf"));
+    }
+
+    #[test]
+    fn extension_fix_for_none_when_already_correct() {
+        // A valid JPEG named .jpeg must not be "fixed" to .jpg: jpeg/jpg are
+        // the same canonical format.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("photo.jpeg");
+        let img: image::RgbImage = ImageBuffer::from_fn(8, 8, |_, _| Rgb([1, 2, 3]));
+        img.save(&path).unwrap();
+
+        assert_eq!(extension_fix_for(&path), None);
+    }
+
+    #[test]
+    fn extension_fix_for_none_for_unrecognized_content() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("mystery.dat");
+        fs::write(&path, b"\x00\x01\x02nothing known").unwrap();
+
+        assert_eq!(extension_fix_for(&path), None);
     }
 
     #[test]

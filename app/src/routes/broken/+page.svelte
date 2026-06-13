@@ -1,6 +1,6 @@
 <script lang="ts">
   import { appState } from '$lib/stores/app';
-  import { findBrokenFiles, deleteFiles, type BrokenFile } from '$lib/api';
+  import { findBrokenFiles, deleteFiles, fixFileExtensions, type BrokenFile } from '$lib/api';
 
   let loading = $state(false);
   let broken: BrokenFile[] = $state([]);
@@ -8,6 +8,7 @@
   let selectedPaths = $state<Set<string>>(new Set());
   let showDeleteConfirm = $state(false);
   let deleteInProgress = $state(false);
+  let fixInProgress = $state(false);
   let sortBy = $state<'name' | 'category' | 'size' | 'path'>('category');
   let sortOrder = $state<'asc' | 'desc'>('asc');
 
@@ -55,17 +56,20 @@
   }
 
   async function handleDelete() {
-    if (selectedPaths.size === 0) return;
+    // Only corrupted files are deletable; misnamed files are renamed, never
+    // deleted (their content is valid).
+    const targets = selectedCorrupted.map((b) => b.path);
+    if (targets.length === 0) return;
 
     deleteInProgress = true;
     try {
       // Defaults to the system trash; only successfully removed items leave
       // the list so any per-file failures stay visible.
-      const results = await deleteFiles(Array.from(selectedPaths));
+      const results = await deleteFiles(targets);
       const deleted = new Set(results.filter((r) => r.success).map((r) => r.path));
       const failed = results.filter((r) => !r.success);
       broken = broken.filter((b) => !deleted.has(b.path));
-      selectedPaths = new Set();
+      selectedPaths = new Set([...selectedPaths].filter((p) => !deleted.has(p)));
       showDeleteConfirm = false;
       if (failed.length > 0) {
         appState.setError(`Failed to delete ${failed.length} item(s): ${failed[0].error ?? 'unknown error'}`);
@@ -74,6 +78,29 @@
       appState.setError(err instanceof Error ? err.message : 'Failed to delete files');
     } finally {
       deleteInProgress = false;
+    }
+  }
+
+  async function handleFix() {
+    // Rename misnamed files to the extension matching their real content. A
+    // fixed file is no longer broken, so it leaves the list.
+    const targets = selectedMismatch.map((b) => b.path);
+    if (targets.length === 0) return;
+
+    fixInProgress = true;
+    try {
+      const results = await fixFileExtensions(targets);
+      const fixed = new Set(results.filter((r) => r.success).map((r) => r.path));
+      const failed = results.filter((r) => !r.success);
+      broken = broken.filter((b) => !fixed.has(b.path));
+      selectedPaths = new Set([...selectedPaths].filter((p) => !fixed.has(p)));
+      if (failed.length > 0) {
+        appState.setError(`Failed to rename ${failed.length} file(s): ${failed[0].error ?? 'unknown error'}`);
+      }
+    } catch (err) {
+      appState.setError(err instanceof Error ? err.message : 'Failed to fix extensions');
+    } finally {
+      fixInProgress = false;
     }
   }
 
@@ -103,6 +130,15 @@
 
   let corruptedCount = $derived(broken.filter((b) => b.category === 'corrupted').length);
   let mismatchCount = $derived(broken.filter((b) => b.category === 'extension_mismatch').length);
+
+  // Selection split by category: corrupted files are deleted, misnamed files
+  // are renamed — never deleted, since their content is valid.
+  let selectedCorrupted = $derived(
+    broken.filter((b) => b.category === 'corrupted' && selectedPaths.has(b.path))
+  );
+  let selectedMismatch = $derived(
+    broken.filter((b) => b.category === 'extension_mismatch' && selectedPaths.has(b.path))
+  );
 
   let sortedItems = $derived.by(() => {
     const items = [...broken];
@@ -167,7 +203,7 @@
           </h2>
           <p class="text-gray-600 mt-1">
             {corruptedCount} corrupted, {mismatchCount} with a wrong extension.
-            Review each file before deleting — a wrong extension may just mean the file is misnamed.
+            Corrupted files can be deleted; misnamed files are renamed to the correct extension, not deleted.
           </p>
         </div>
         {#if selectedPaths.size > 0}
@@ -178,12 +214,23 @@
             >
               Clear Selection ({selectedPaths.size})
             </button>
-            <button
-              onclick={() => (showDeleteConfirm = true)}
-              class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
-            >
-              Delete Selected
-            </button>
+            {#if selectedMismatch.length > 0}
+              <button
+                onclick={handleFix}
+                disabled={fixInProgress}
+                class="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50"
+              >
+                {fixInProgress ? 'Renaming...' : `Fix Extension (${selectedMismatch.length})`}
+              </button>
+            {/if}
+            {#if selectedCorrupted.length > 0}
+              <button
+                onclick={() => (showDeleteConfirm = true)}
+                class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+              >
+                Delete Corrupted ({selectedCorrupted.length})
+              </button>
+            {/if}
           </div>
         {/if}
       </div>
@@ -270,6 +317,9 @@
                 <span class="text-sm text-gray-700 truncate max-w-xs block" title={item.reason}>
                   {item.reason}
                 </span>
+                {#if item.category === 'extension_mismatch' && item.suggested_extension}
+                  <span class="text-xs text-amber-700">→ rename to .{item.suggested_extension}</span>
+                {/if}
               </td>
               <td class="px-6 py-4">
                 <span class="text-sm text-gray-600 truncate max-w-xs block" title={item.path}>
@@ -301,7 +351,7 @@
     <div class="bg-white rounded-lg p-6 max-w-md w-full mx-4">
       <h3 class="text-lg font-semibold mb-2">Confirm Deletion</h3>
       <p class="text-gray-600 mb-4">
-        Are you sure you want to delete {selectedPaths.size} broken file{selectedPaths.size !== 1 ? 's' : ''}?
+        Are you sure you want to delete {selectedCorrupted.length} corrupted file{selectedCorrupted.length !== 1 ? 's' : ''}?
         This action cannot be undone.
       </p>
       <div class="flex gap-2 justify-end">

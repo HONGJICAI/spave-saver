@@ -1,4 +1,4 @@
-import type { BrokenFile } from "../lib/types";
+import type { BrokenFile, FixExtensionResult } from "../lib/types";
 
 // Mock broken (invalid/corrupted) files. Trigger words (shared mock
 // conventions):
@@ -49,15 +49,38 @@ export function mockFindBroken(path: string): Promise<BrokenFile[]> {
           path: `${path}/photos/scan.jpg`,
           size: 524288,
           category: "extension_mismatch",
-          reason: "Content looks like pdf but the extension is .jpg"
+          reason: "Content looks like pdf but the extension is .jpg",
+          suggested_extension: "pdf"
         },
         {
           path: `${path}/locked/report.png`,
           size: 65536,
           category: "extension_mismatch",
-          reason: "Content looks like pdf but the extension is .png"
+          reason: "Content looks like pdf but the extension is .png",
+          suggested_extension: "pdf"
         }
       ]);
     }, 800);
+  });
+}
+
+// Mock the "fix extension" rename. Mirrors the backend: the misnamed files in
+// the mock above are all PDF content, so they rename to .pdf. The "locked/"
+// path demos a permission failure (it stays in the broken list), matching the
+// backend reporting a per-file error instead of aborting.
+export function mockFixExtensions(paths: string[]): Promise<FixExtensionResult[]> {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      resolve(
+        paths.map((path) => {
+          if (path.includes("locked")) {
+            return { path, success: false, error: "Permission denied (os error 13)" };
+          }
+          // Swap the current extension for the detected content's extension
+          const new_path = path.replace(/\.[^./\\]+$/, ".pdf");
+          return { path, success: true, new_path };
+        })
+      );
+    }, 400);
   });
 }

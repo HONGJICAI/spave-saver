@@ -5,6 +5,7 @@ import {
   findSimilarImages,
   findEmptyItems,
   findBrokenFiles,
+  fixFileExtensions,
   deleteFiles,
   getStorageStats,
   getCompressionPlugins,
@@ -103,6 +104,31 @@ describe('API Layer', () => {
 
       expect(categories.has('corrupted')).toBe(true);
       expect(categories.has('extension_mismatch')).toBe(true);
+    });
+
+    it('findBrokenFiles mismatches carry a suggested extension, corrupted do not', async () => {
+      const result = await findBrokenFiles(['/test/path']);
+
+      const mismatch = result.find(b => b.category === 'extension_mismatch');
+      expect(mismatch?.suggested_extension).toBeTruthy();
+
+      const corrupted = result.find(b => b.category === 'corrupted');
+      expect(corrupted?.suggested_extension == null).toBe(true);
+    });
+
+    it('fixFileExtensions renames misnamed files in web mode', async () => {
+      const results = await fixFileExtensions(['/photos/scan.jpg']);
+
+      expect(results).toHaveLength(1);
+      expect(results[0].success).toBe(true);
+      expect(results[0].new_path).toBe('/photos/scan.pdf');
+    });
+
+    it('fixFileExtensions mock reports a permission failure for locked files', async () => {
+      const results = await fixFileExtensions(['/locked/report.png']);
+
+      expect(results[0].success).toBe(false);
+      expect(results[0].error).toBeTruthy();
     });
 
     it('findBrokenFiles merges results across multiple paths', async () => {

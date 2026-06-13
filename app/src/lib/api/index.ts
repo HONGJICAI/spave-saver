@@ -4,13 +4,13 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ScanResult, DuplicateGroup, SimilarGroup, StorageStats, FileInfo, EmptyScanResult, BrokenFile, BrokenCategory } from "../types";
+import type { ScanResult, DuplicateGroup, SimilarGroup, StorageStats, FileInfo, EmptyScanResult, BrokenFile, BrokenCategory, FixExtensionResult } from "../types";
 import type { FilterConfig } from "../stores/app";
 import { mockScanResult } from "../../mock/scan";
 import { mockFindDuplicates } from "../../mock/duplicates";
 import { mockFindSimilar } from "../../mock/similar";
 import { mockEmptyItems } from "../../mock/empty";
-import { mockFindBroken } from "../../mock/broken";
+import { mockFindBroken, mockFixExtensions } from "../../mock/broken";
 import { mockStorageStats } from "../../mock/stats";
 import { mockPlugins, isKnownPlugin } from "../../mock/plugins";
 import { mockSkipCache } from "../../mock/skipCache";
@@ -18,7 +18,7 @@ import { mockSkipCache } from "../../mock/skipCache";
 // Check if running in Tauri environment
 const isTauri = "__TAURI_INTERNALS__" in window;
 
-export { type ScanResult, type DuplicateGroup, type SimilarGroup, type StorageStats, type FileInfo, type FilterConfig, type EmptyScanResult, type BrokenFile, type BrokenCategory };
+export { type ScanResult, type DuplicateGroup, type SimilarGroup, type StorageStats, type FileInfo, type FilterConfig, type EmptyScanResult, type BrokenFile, type BrokenCategory, type FixExtensionResult };
 
 /**
  * Scan multiple directories for files
@@ -95,6 +95,19 @@ export async function findBrokenFiles(paths: string[], filter?: FilterConfig): P
   } else {
     const results = await Promise.all(paths.map(path => mockFindBroken(path)));
     return results.flat();
+  }
+}
+
+/**
+ * Fix misnamed files by renaming them to the extension matching their real
+ * content (e.g. a PDF named .jpg becomes .pdf). The safe action for
+ * extension-mismatch results — the file is valid, just named wrong.
+ */
+export async function fixFileExtensions(paths: string[]): Promise<FixExtensionResult[]> {
+  if (isTauri) {
+    return await invoke<FixExtensionResult[]>("fix_file_extensions", { paths });
+  } else {
+    return await mockFixExtensions(paths);
   }
 }
 

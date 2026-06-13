@@ -374,6 +374,7 @@ impl ServiceApi {
                     size: file.size,
                     category: reason.category,
                     reason: reason.detail,
+                    suggested_extension: reason.suggested_extension,
                 })
             })
             .collect();
@@ -502,6 +503,9 @@ pub struct BrokenFile {
     pub category: BrokenCategory,
     /// Human-readable explanation, worded close to the underlying error
     pub reason: String,
+    /// For an extension mismatch, the extension matching the real content so
+    /// the file can be renamed instead of deleted. `None` for corruption.
+    pub suggested_extension: Option<String>,
 }
 
 /// Storage statistics
@@ -1011,6 +1015,8 @@ mod tests {
             .find(|b| b.path.ends_with("fake.png"))
             .unwrap();
         assert_eq!(mismatch.category, BrokenCategory::ExtensionMismatch);
+        assert_eq!(mismatch.suggested_extension.as_deref(), Some("pdf"));
+        assert_eq!(corrupted.suggested_extension, None);
     }
 
     #[tokio::test]
