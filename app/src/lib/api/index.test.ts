@@ -15,7 +15,12 @@ import {
   compressFilesInPlace,
   getSkipCacheInfo,
   clearSkipCache,
+  getConfig,
+  setConfig,
+  resetConfig,
+  detectTools,
 } from './index';
+import { resetMockConfig, defaultConfig } from '../../mock/config';
 
 // Mock Tauri API
 vi.mock('@tauri-apps/api/core', () => ({
@@ -29,6 +34,8 @@ describe('API Layer', () => {
       vi.stubGlobal('__TAURI_INTERNALS__', undefined);
       // The mock skip cache is module state; reset it so tests stay independent
       await clearSkipCache();
+      // The mock config persists to localStorage; reset it too
+      resetMockConfig();
     });
 
     it('scanDirectory returns mock data in web mode', async () => {
@@ -206,6 +213,33 @@ describe('API Layer', () => {
       await expect(setPluginQuality('WebP Converter', 60)).resolves.toBeUndefined();
     });
 
+    it('setPluginQuality persists quality so getCompressionPlugins reflects it', async () => {
+      await setPluginQuality('WebP Converter', 50);
+
+      const plugins = await getCompressionPlugins();
+      const webp = plugins.find(p => p.name === 'WebP Converter');
+      expect(webp?.quality).toBe(50);
+      // Other plugins keep their default
+      expect(plugins.find(p => p.name === 'Animated WebP Converter')?.quality).toBe(85);
+
+      // It is stored in the config (the single source of truth)
+      expect((await getConfig()).plugin_quality['WebP Converter']).toBe(50);
+    });
+
+    it('setPluginQuality clamps out-of-range quality like the backend', async () => {
+      await setPluginQuality('WebP Converter', 250);
+      expect((await getConfig()).plugin_quality['WebP Converter']).toBe(100);
+    });
+
+    it('resetConfig clears persisted plugin quality back to the default', async () => {
+      await setPluginQuality('WebP Converter', 40);
+      expect((await getCompressionPlugins()).find(p => p.name === 'WebP Converter')?.quality).toBe(40);
+
+      await resetConfig();
+      const plugins = await getCompressionPlugins();
+      expect(plugins.find(p => p.name === 'WebP Converter')?.quality).toBe(85);
+    });
+
     it('scanCompressibleFiles returns compressible and rejected lists in web mode', async () => {
       const result = await scanCompressibleFiles(['/test/path'], ['WebP Converter']);
 
@@ -339,6 +373,90 @@ describe('API Layer', () => {
       expect((await getSkipCacheInfo()).entries).toBe(0);
       const rescan = await scanCompressibleFiles(['/test/path'], ['WebP Converter']);
       expect(rescan.compressible.some(f => f.path.includes('already-tiny'))).toBe(true);
+    });
+
+    it('getConfig returns the default configuration in web mode', async () => {
+      const config = await getConfig();
+
+      expect(config).toEqual(defaultConfig());
+      expect(config.image_similarity_threshold).toBe(0.9);
+      expect(config.default_delete_mode).toBe('trash');
+      expect(config.default_compress_backup).toBe(true);
+      expect(config.scan.exclude_patterns.length).toBeGreaterThan(0);
+    });
+
+    it('setConfig persists changes so the next getConfig returns them', async () => {
+      const config = await getConfig();
+      config.image_similarity_threshold = 0.7;
+      config.default_delete_mode = 'permanent';
+      config.default_compress_backup = false;
+
+      const saved = await setConfig(config);
+      expect(saved.image_similarity_threshold).toBe(0.7);
+
+      const reloaded = await getConfig();
+      expect(reloaded.image_similarity_threshold).toBe(0.7);
+      expect(reloaded.default_delete_mode).toBe('permanent');
+      expect(reloaded.default_compress_backup).toBe(false);
+    });
+
+    it('setConfig rejects out-of-range thresholds with the backend error string', async () => {
+      const config = await getConfig();
+      config.image_similarity_threshold = 5;
+
+      await expect(setConfig(config)).rejects.toContain('between 0.0 and 1.0');
+    });
+
+    it('setConfig rejects an invalid delete mode like the backend', async () => {
+      const config = await getConfig();
+      // @ts-expect-error deliberately invalid to exercise the validation path
+      config.default_delete_mode = 'shred';
+
+      await expect(setConfig(config)).rejects.toContain("'trash' or 'permanent'");
+    });
+
+    it('setConfig rejects a max_concurrent_tasks below 1', async () => {
+      const config = await getConfig();
+      config.max_concurrent_tasks = 0;
+
+      await expect(setConfig(config)).rejects.toContain('at least 1');
+    });
+
+    it('resetConfig restores defaults and persists them in web mode', async () => {
+      // Change something and confirm it stuck...
+      const config = await getConfig();
+      config.image_similarity_threshold = 0.6;
+      config.default_delete_mode = 'permanent';
+      await setConfig(config);
+      expect((await getConfig()).image_similarity_threshold).toBe(0.6);
+
+      // ...then reset returns and persists the defaults
+      const defaults = await resetConfig();
+      expect(defaults).toEqual(defaultConfig());
+
+      const reloaded = await getConfig();
+      expect(reloaded.image_similarity_threshold).toBe(0.9);
+      expect(reloaded.default_delete_mode).toBe('trash');
+    });
+
+    it('detectTools reports both available and missing tools in web mode', async () => {
+      const tools = await detectTools();
+
+      const names = tools.map(t => t.name);
+      expect(names).toContain('ffmpeg');
+      expect(names).toContain('cwebp');
+
+      // The mock deliberately covers both states the backend can report
+      expect(tools.some(t => t.available)).toBe(true);
+      expect(tools.some(t => !t.available)).toBe(true);
+
+      const ffmpeg = tools.find(t => t.name === 'ffmpeg');
+      expect(ffmpeg?.available).toBe(true);
+      expect(ffmpeg?.version).toBeTruthy();
+
+      const cwebp = tools.find(t => t.name === 'cwebp');
+      expect(cwebp?.available).toBe(false);
+      expect(cwebp?.path == null).toBe(true);
     });
   });
 

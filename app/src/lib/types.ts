@@ -113,6 +113,52 @@ export interface FixExtensionResult {
 }
 
 /**
+ * Hash algorithm used for duplicate detection. Serialized by serde as the
+ * bare variant name, so the strings must match the Rust enum exactly.
+ */
+export type HashAlgorithm = "Blake3" | "Sha256";
+
+/**
+ * Scan settings, mirroring crates/utils ScanConfig (serde snake_case).
+ */
+export interface ScanConfig {
+  follow_links: boolean;
+  max_depth?: number | null;
+  min_file_size: number;
+  exclude_patterns: string[];
+}
+
+/**
+ * Application configuration, mirroring crates/utils Config. Paths serialize
+ * as strings. The frontend reads these values as operational defaults
+ * (similarity threshold, delete mode, compression backup).
+ */
+export interface AppConfig {
+  database_path: string;
+  cache_dir: string;
+  log_level: string;
+  max_concurrent_tasks: number;
+  hash_algorithm: HashAlgorithm;
+  image_similarity_threshold: number;
+  default_delete_mode: "trash" | "permanent";
+  default_compress_backup: boolean;
+  /** Per-plugin quality (0-100) keyed by plugin name; absent = built-in default */
+  plugin_quality: Record<string, number>;
+  scan: ScanConfig;
+}
+
+/**
+ * Status of an optional external command-line tool (ffmpeg etc.) on PATH.
+ */
+export interface ToolStatus {
+  name: string;
+  available: boolean;
+  path?: string | null;
+  version?: string | null;
+  purpose: string;
+}
+
+/**
  * Storage statistics
  */
 export interface StorageStats {

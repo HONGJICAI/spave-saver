@@ -1,8 +1,10 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { appState } from '$lib/stores/app';
   import {
     findSimilarMedia,
     deleteFiles,
+    getConfig,
     type SimilarGroup,
     type MediaKind,
     type DeleteMode,
@@ -68,6 +70,18 @@
       case 'similarity':
       default:
         return sorted.sort((a, b) => b.similarity_score - a.similarity_score);
+    }
+  });
+
+  // Seed the threshold and delete mode from the saved configuration so the
+  // Settings page actually drives this page's defaults.
+  onMount(async () => {
+    try {
+      const cfg = await getConfig();
+      threshold = cfg.image_similarity_threshold;
+      deleteMode = cfg.default_delete_mode;
+    } catch {
+      // Fall back to the in-component defaults if config can't be read
     }
   });
 
@@ -184,14 +198,14 @@
         <input
           id="threshold"
           type="range"
-          min="0.7"
+          min="0.5"
           max="1.0"
           step="0.05"
           bind:value={threshold}
           class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
         />
         <div class="flex justify-between text-xs text-gray-500 mt-1">
-          <span>More matches (70%)</span>
+          <span>More matches (50%)</span>
           <span>Exact only (100%)</span>
         </div>
       </div>

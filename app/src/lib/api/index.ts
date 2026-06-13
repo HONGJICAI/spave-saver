@@ -4,7 +4,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ScanResult, DuplicateGroup, SimilarGroup, SimilarFile, MediaKind, StorageStats, FileInfo, EmptyScanResult, BrokenFile, BrokenCategory, FixExtensionResult } from "../types";
+import type { ScanResult, DuplicateGroup, SimilarGroup, SimilarFile, MediaKind, StorageStats, FileInfo, EmptyScanResult, BrokenFile, BrokenCategory, FixExtensionResult, AppConfig, ScanConfig, HashAlgorithm, ToolStatus } from "../types";
 import type { FilterConfig } from "../stores/app";
 import { mockScanResult } from "../../mock/scan";
 import { mockFindDuplicates } from "../../mock/duplicates";
@@ -14,11 +14,13 @@ import { mockFindBroken, mockFixExtensions } from "../../mock/broken";
 import { mockStorageStats } from "../../mock/stats";
 import { mockPlugins, isKnownPlugin } from "../../mock/plugins";
 import { mockSkipCache } from "../../mock/skipCache";
+import { getMockConfig, setMockConfig, resetMockConfig } from "../../mock/config";
+import { mockDetectTools } from "../../mock/tools";
 
 // Check if running in Tauri environment
 const isTauri = "__TAURI_INTERNALS__" in window;
 
-export { type ScanResult, type DuplicateGroup, type SimilarGroup, type SimilarFile, type MediaKind, type StorageStats, type FileInfo, type FilterConfig, type EmptyScanResult, type BrokenFile, type BrokenCategory, type FixExtensionResult };
+export { type ScanResult, type DuplicateGroup, type SimilarGroup, type SimilarFile, type MediaKind, type StorageStats, type FileInfo, type FilterConfig, type EmptyScanResult, type BrokenFile, type BrokenCategory, type FixExtensionResult, type AppConfig, type ScanConfig, type HashAlgorithm, type ToolStatus };
 
 /**
  * Scan multiple directories for files
@@ -333,25 +335,31 @@ export async function getCompressionPlugins(): Promise<CompressionPlugin[]> {
   if (isTauri) {
     return await invoke<CompressionPlugin[]>("get_compression_plugins");
   } else {
-    // Copies, so UI-side mutation cannot leak into the shared mock list
-    return mockPlugins.map(p => ({ ...p }));
+    // Reflect persisted quality from the mock config (the backend seeds the
+    // plugin manager from config at startup); copies prevent UI mutation from
+    // leaking into the shared mock list.
+    const cfg = getMockConfig();
+    return mockPlugins.map(p => ({ ...p, quality: cfg.plugin_quality[p.name] ?? p.quality }));
   }
 }
 
 /**
- * Set the quality (0-100) of a compression plugin
+ * Set the quality (0-100) of a compression plugin. Persisted to the config so
+ * it survives a restart (config is the single source of truth for quality).
  */
 export async function setPluginQuality(pluginName: string, quality: number): Promise<void> {
   if (isTauri) {
     await invoke("set_plugin_quality", { pluginName, quality });
   } else {
-    // Mirrors the backend: unknown plugin names fail (quality itself is
-    // clamped backend-side, never an error). Like a real invoke() failure,
-    // the rejection value is the backend's plain error string.
+    // Mirrors the backend: unknown plugin names fail. Like a real invoke()
+    // failure, the rejection value is the backend's plain error string.
     if (!isKnownPlugin(pluginName)) {
       return Promise.reject(`Plugin not found: ${pluginName}`);
     }
-    // Success is a no-op: mock plugins keep their displayed value in the UI
+    // Persist the clamped value into the mock config, just like the backend
+    const cfg = getMockConfig();
+    cfg.plugin_quality[pluginName] = Math.max(0, Math.min(100, quality));
+    setMockConfig(cfg);
   }
 }
 
@@ -553,6 +561,68 @@ export async function clearSkipCache(): Promise<number> {
     return await invoke<number>("clear_skip_cache");
   } else {
     return mockSkipCache.clear();
+  }
+}
+
+/**
+ * Get the current application configuration (defaults if none saved yet).
+ * The single source of truth: Tauri reads config.toml, web reads localStorage.
+ */
+export async function getConfig(): Promise<AppConfig> {
+  if (isTauri) {
+    return await invoke<AppConfig>("get_config");
+  } else {
+    return getMockConfig();
+  }
+}
+
+/**
+ * Validate and persist the application configuration, returning what was saved.
+ * The web branch mirrors the backend's validate() so the settings UI surfaces
+ * the same rejection strings (rejected as a plain string, like a real invoke).
+ */
+export async function setConfig(config: AppConfig): Promise<AppConfig> {
+  if (isTauri) {
+    return await invoke<AppConfig>("set_config", { config });
+  } else {
+    if (config.image_similarity_threshold < 0 || config.image_similarity_threshold > 1) {
+      return Promise.reject(
+        `image_similarity_threshold must be between 0.0 and 1.0, got ${config.image_similarity_threshold}`
+      );
+    }
+    if (config.max_concurrent_tasks < 1) {
+      return Promise.reject("max_concurrent_tasks must be at least 1");
+    }
+    if (config.default_delete_mode !== "trash" && config.default_delete_mode !== "permanent") {
+      return Promise.reject(
+        `default_delete_mode must be 'trash' or 'permanent', got '${config.default_delete_mode}'`
+      );
+    }
+    return setMockConfig(config);
+  }
+}
+
+/**
+ * Reset the configuration to defaults, persisting and returning them. The
+ * backend's Config::default() is the single source of truth for the values.
+ */
+export async function resetConfig(): Promise<AppConfig> {
+  if (isTauri) {
+    return await invoke<AppConfig>("reset_config");
+  } else {
+    return resetMockConfig();
+  }
+}
+
+/**
+ * Detect optional external tools (ffmpeg etc.) on PATH. Used by the settings
+ * page to show the environment and gate features that build on these tools.
+ */
+export async function detectTools(): Promise<ToolStatus[]> {
+  if (isTauri) {
+    return await invoke<ToolStatus[]>("detect_tools");
+  } else {
+    return mockDetectTools();
   }
 }
 

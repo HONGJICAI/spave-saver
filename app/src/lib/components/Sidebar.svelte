@@ -18,7 +18,8 @@
     { name: 'Similar', path: '/similar', icon: '🖼️' },
     { name: 'Empty', path: '/empty', icon: '📄' },
     { name: 'Broken', path: '/broken', icon: '🚫' },
-    { name: 'Compress', path: '/compress', icon: '🗜️' }
+    { name: 'Compress', path: '/compress', icon: '🗜️' },
+    { name: 'Settings', path: '/settings', icon: '⚙️' }
   ];
 
   let mode = 'Loading...';
