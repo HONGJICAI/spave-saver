@@ -1,18 +1,21 @@
 <script lang="ts">
   import { appState } from '$lib/stores/app';
   import { onMount } from 'svelte';
+  import PathListEditor from './PathListEditor.svelte';
 
   interface Props {
     show?: boolean;
   }
-  
+
   let { show = false }: Props = $props();
 
   let minSize = $state('');
   let maxSize = $state('');
   let extensions = $state('');
   let filePattern = $state('');
-  let excludePaths = $state('');
+  // Exclude paths use the same path-input + chip-list + validation UI as Scan
+  // Paths (see PathListEditor); kept as an array the editor mutates directly.
+  let excludePaths = $state<string[]>([]);
 
   // Load persisted filter values on mount
   onMount(() => {
@@ -30,22 +33,18 @@
       filePattern = currentFilter.filePattern;
     }
     if (currentFilter.excludePaths && currentFilter.excludePaths.length > 0) {
-      excludePaths = currentFilter.excludePaths.join('\n');
+      excludePaths = [...currentFilter.excludePaths];
     }
   });
 
   // Sync filter changes to global store
   $effect(() => {
-    const excluded = excludePaths
-      .split('\n')
-      .map(p => p.trim())
-      .filter(p => p);
     appState.setFilterConfig({
       minSize: minSize ? parseFloat(minSize) * 1024 * 1024 : undefined,
       maxSize: maxSize ? parseFloat(maxSize) * 1024 * 1024 : undefined,
       extensions: extensions ? extensions.split(',').map(e => e.trim()).filter(e => e) : undefined,
       filePattern: filePattern || undefined,
-      excludePaths: excluded.length > 0 ? excluded : undefined
+      excludePaths: excludePaths.length > 0 ? [...excludePaths] : undefined
     });
   });
 
@@ -54,7 +53,7 @@
     maxSize = '';
     extensions = '';
     filePattern = '';
-    excludePaths = '';
+    excludePaths = [];
     appState.clearFilters();
   }
 
@@ -64,7 +63,7 @@
     if (maxSize) count++;
     if (extensions) count++;
     if (filePattern) count++;
-    if (excludePaths.trim()) count++;
+    if (excludePaths.length) count++;
     return count;
   });
 </script>
@@ -140,14 +139,14 @@
 
       <!-- Exclude Paths Filter -->
       <div>
-        <label for="excludePaths" class="block text-xs text-gray-600 mb-1">Exclude Paths (one per line)</label>
-        <textarea
-          id="excludePaths"
-          bind:value={excludePaths}
-          rows="3"
-          placeholder="e.g.&#10;/home/user/node_modules&#10;/home/user/.cache"
-          class="w-full px-2 py-1.5 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 focus:border-transparent font-mono"
-        ></textarea>
+        <span class="block text-xs text-gray-600 mb-1">Exclude Paths</span>
+        <PathListEditor
+          paths={excludePaths}
+          placeholder="Add path to exclude..."
+          onSetPaths={(p) => (excludePaths = p)}
+          onRemove={(p) => (excludePaths = excludePaths.filter((x) => x !== p))}
+          onClearAll={() => (excludePaths = [])}
+        />
         <p class="mt-1 text-xs text-gray-500">Files at or beneath these paths are skipped</p>
       </div>
 
