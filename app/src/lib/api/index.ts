@@ -14,7 +14,7 @@ import { mockFindBroken, mockFixExtensions } from "../../mock/broken";
 import { mockStorageStats } from "../../mock/stats";
 import { mockPlugins, isKnownPlugin } from "../../mock/plugins";
 import { mockSkipCache } from "../../mock/skipCache";
-import { getMockConfig, setMockConfig } from "../../mock/config";
+import { getMockConfig, setMockConfig, resetMockConfig } from "../../mock/config";
 import { mockDetectTools } from "../../mock/tools";
 
 // Check if running in Tauri environment
@@ -570,6 +570,18 @@ export async function setConfig(config: AppConfig): Promise<AppConfig> {
       );
     }
     return setMockConfig(config);
+  }
+}
+
+/**
+ * Reset the configuration to defaults, persisting and returning them. The
+ * backend's Config::default() is the single source of truth for the values.
+ */
+export async function resetConfig(): Promise<AppConfig> {
+  if (isTauri) {
+    return await invoke<AppConfig>("reset_config");
+  } else {
+    return resetMockConfig();
   }
 }
 

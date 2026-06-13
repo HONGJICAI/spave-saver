@@ -3,6 +3,7 @@
   import {
     getConfig,
     setConfig,
+    resetConfig,
     detectTools,
     getCompressionPlugins,
     setPluginQuality,
@@ -14,6 +15,9 @@
   import type { CompressionPlugin } from '$lib/api';
   import { formatSize } from '$lib/utils/format';
 
+  // Default plugin quality, mirroring the backend plugins' default.
+  const DEFAULT_PLUGIN_QUALITY = 85;
+
   let config = $state<AppConfig | null>(null);
   let tools = $state<ToolStatus[]>([]);
   let plugins = $state<CompressionPlugin[]>([]);
@@ -21,9 +25,10 @@
 
   let loading = $state(true);
   let detectingTools = $state(false);
-  let saving = $state(false);
+  let resetting = $state(false);
   let error = $state<string | null>(null);
-  let saved = $state(false);
+  // Briefly shown after any change is persisted (settings save instantly).
+  let savedTick = $state(false);
 
   onMount(async () => {
     try {
@@ -52,29 +57,56 @@
     }
   }
 
-  async function handleSave() {
+  function flashSaved() {
+    savedTick = true;
+    setTimeout(() => (savedTick = false), 1500);
+  }
+
+  function toMessage(err: unknown): string {
+    return typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
+  }
+
+  // Settings save instantly: each control commits the whole config on change.
+  async function persistConfig() {
     if (!config) return;
-    saving = true;
-    saved = false;
     error = null;
     try {
       // setConfig rejects with the backend's plain error string on bad input
       config = await setConfig(config);
-      saved = true;
-      setTimeout(() => (saved = false), 2500);
+      flashSaved();
     } catch (err) {
-      error = typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
-    } finally {
-      saving = false;
+      error = toMessage(err);
     }
   }
 
-  async function handlePluginQuality(plugin: CompressionPlugin) {
+  // Plugin quality is separate backend state; it also saves on change.
+  async function persistPluginQuality(plugin: CompressionPlugin) {
     error = null;
     try {
-      await setPluginQuality(plugin.name, plugin.quality ?? 85);
+      await setPluginQuality(plugin.name, plugin.quality ?? DEFAULT_PLUGIN_QUALITY);
+      flashSaved();
     } catch (err) {
-      error = typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
+      error = toMessage(err);
+    }
+  }
+
+  async function handleRestoreDefaults() {
+    resetting = true;
+    error = null;
+    try {
+      config = await resetConfig();
+      // Also bring plugin qualities back to their default
+      for (const plugin of plugins) {
+        if (plugin.quality !== DEFAULT_PLUGIN_QUALITY) {
+          await setPluginQuality(plugin.name, DEFAULT_PLUGIN_QUALITY);
+        }
+      }
+      plugins = plugins.map((p) => ({ ...p, quality: DEFAULT_PLUGIN_QUALITY }));
+      flashSaved();
+    } catch (err) {
+      error = toMessage(err);
+    } finally {
+      resetting = false;
     }
   }
 
@@ -89,9 +121,14 @@
 </script>
 
 <div class="p-6 max-w-3xl">
-  <div class="mb-6">
-    <h1 class="text-3xl font-bold text-gray-900 mb-2">Settings</h1>
-    <p class="text-gray-600">Configure scan defaults, behaviour and inspect the environment</p>
+  <div class="mb-6 flex items-start justify-between">
+    <div>
+      <h1 class="text-3xl font-bold text-gray-900 mb-2">Settings</h1>
+      <p class="text-gray-600">Changes are saved automatically</p>
+    </div>
+    {#if savedTick}
+      <span class="text-green-600 text-sm mt-2" role="status">Saved ✓</span>
+    {/if}
   </div>
 
   {#if error}
@@ -161,6 +198,7 @@
         max="1.0"
         step="0.05"
         bind:value={config.image_similarity_threshold}
+        onchange={persistConfig}
         class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
       />
       <p class="text-xs text-gray-500 mt-1">
@@ -175,14 +213,14 @@
       <fieldset class="mb-4">
         <legend class="text-sm font-medium text-gray-700 mb-2">Default delete mode</legend>
         <label class="flex items-start gap-2 mb-2">
-          <input type="radio" bind:group={config.default_delete_mode} value="trash" class="mt-1" />
+          <input type="radio" bind:group={config.default_delete_mode} value="trash" onchange={persistConfig} class="mt-1" />
           <span>
             <span class="font-medium">Move to Trash</span>
             <span class="block text-xs text-gray-500">Recoverable from the system recycle bin</span>
           </span>
         </label>
         <label class="flex items-start gap-2">
-          <input type="radio" bind:group={config.default_delete_mode} value="permanent" class="mt-1" />
+          <input type="radio" bind:group={config.default_delete_mode} value="permanent" onchange={persistConfig} class="mt-1" />
           <span>
             <span class="font-medium">Delete permanently</span>
             <span class="block text-xs text-gray-500">Removed from disk immediately, cannot be undone</span>
@@ -191,7 +229,7 @@
       </fieldset>
 
       <label class="flex items-center gap-2">
-        <input type="checkbox" bind:checked={config.default_compress_backup} />
+        <input type="checkbox" bind:checked={config.default_compress_backup} onchange={persistConfig} />
         <span>
           <span class="font-medium">Keep a backup when compressing</span>
           <span class="block text-xs text-gray-500">Keeps the original as <code>&lt;name&gt;.bak</code> by default</span>
@@ -214,15 +252,11 @@
                 max="100"
                 step="1"
                 bind:value={plugin.quality}
+                onchange={() => persistPluginQuality(plugin)}
                 class="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                aria-label={`${plugin.name} quality`}
               />
               <span class="w-10 text-sm text-gray-700 text-right">{plugin.quality}</span>
-              <button
-                onclick={() => handlePluginQuality(plugin)}
-                class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-              >
-                Apply
-              </button>
             </div>
           </div>
         {/each}
@@ -280,15 +314,13 @@
     <!-- Save bar -->
     <div class="flex items-center gap-3">
       <button
-        onclick={handleSave}
-        disabled={saving}
-        class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300"
+        onclick={handleRestoreDefaults}
+        disabled={resetting}
+        class="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50"
       >
-        {saving ? 'Saving…' : 'Save settings'}
+        {resetting ? 'Restoring…' : 'Restore defaults'}
       </button>
-      {#if saved}
-        <span class="text-green-600 text-sm">Saved ✓</span>
-      {/if}
+      <span class="text-xs text-gray-500">Resets scan, behaviour and compression quality to their defaults</span>
     </div>
   {/if}
 </div>

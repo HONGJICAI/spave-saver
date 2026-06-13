@@ -16,6 +16,7 @@ import {
   clearSkipCache,
   getConfig,
   setConfig,
+  resetConfig,
   detectTools,
 } from './index';
 import { resetMockConfig, defaultConfig } from '../../mock/config';
@@ -370,6 +371,23 @@ describe('API Layer', () => {
       config.max_concurrent_tasks = 0;
 
       await expect(setConfig(config)).rejects.toContain('at least 1');
+    });
+
+    it('resetConfig restores defaults and persists them in web mode', async () => {
+      // Change something and confirm it stuck...
+      const config = await getConfig();
+      config.image_similarity_threshold = 0.6;
+      config.default_delete_mode = 'permanent';
+      await setConfig(config);
+      expect((await getConfig()).image_similarity_threshold).toBe(0.6);
+
+      // ...then reset returns and persists the defaults
+      const defaults = await resetConfig();
+      expect(defaults).toEqual(defaultConfig());
+
+      const reloaded = await getConfig();
+      expect(reloaded.image_similarity_threshold).toBe(0.9);
+      expect(reloaded.default_delete_mode).toBe('trash');
     });
 
     it('detectTools reports both available and missing tools in web mode', async () => {

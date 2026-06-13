@@ -37,7 +37,9 @@ export function setMockConfig(config: AppConfig): AppConfig {
   return config;
 }
 
-/** Reset persisted config back to defaults (used to keep tests independent). */
-export function resetMockConfig(): void {
-  saveToStorage(CONFIG_KEY, defaultConfig());
+/** Reset persisted config back to defaults, returning the defaults. */
+export function resetMockConfig(): AppConfig {
+  const config = defaultConfig();
+  saveToStorage(CONFIG_KEY, config);
+  return config;
 }

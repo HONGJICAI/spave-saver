@@ -525,6 +525,14 @@ fn save_config_to(
     config.save(path).map_err(|e| e.to_string())
 }
 
+/// Write the default configuration to a path, returning it. Split from the
+/// command so it can be tested against a temp path.
+fn reset_config_at(path: &std::path::Path) -> Result<space_saver_utils::Config, String> {
+    let config = space_saver_utils::Config::default();
+    config.save(path).map_err(|e| e.to_string())?;
+    Ok(config)
+}
+
 /// Get the current application configuration (or defaults if none saved yet)
 #[tauri::command]
 pub async fn get_config() -> Result<space_saver_utils::Config, String> {
@@ -538,6 +546,12 @@ pub async fn set_config(
 ) -> Result<space_saver_utils::Config, String> {
     save_config_to(&config_path(), &config)?;
     Ok(config)
+}
+
+/// Reset the configuration to defaults, persisting and returning them
+#[tauri::command]
+pub async fn reset_config() -> Result<space_saver_utils::Config, String> {
+    reset_config_at(&config_path())
 }
 
 /// Detect optional external tools (ffmpeg etc.) on PATH. Runs the (blocking)
@@ -1062,6 +1076,26 @@ mod tests {
             ..Default::default()
         };
         assert!(save_config_to(&path, &bad_mode).is_err());
+    }
+
+    #[test]
+    fn reset_config_writes_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        // Persist a non-default config, then reset it back
+        let custom = space_saver_utils::Config {
+            default_delete_mode: "permanent".to_string(),
+            ..Default::default()
+        };
+        save_config_to(&path, &custom).unwrap();
+
+        let defaults = reset_config_at(&path).unwrap();
+        assert_eq!(defaults.default_delete_mode, "trash");
+
+        // The reset must have been written, not just returned
+        let loaded = load_config_from(&path).unwrap();
+        assert_eq!(loaded.default_delete_mode, "trash");
     }
 
     #[tokio::test]

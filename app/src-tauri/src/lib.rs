@@ -28,6 +28,7 @@ pub fn run() {
             clear_skip_cache,
             get_config,
             set_config,
+            reset_config,
             detect_tools
         ])
         .run(tauri::generate_context!())
