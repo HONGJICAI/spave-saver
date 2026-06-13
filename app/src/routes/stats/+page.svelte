@@ -27,10 +27,11 @@
     }
     
     loading = true;
+    appState.setBusy(true);
     error = '';
     stats = null;
     scanResults = [];
-    
+
     try {
       // Fetch both stats and file list in parallel
       const [statsResult, filesData] = await Promise.all([
@@ -43,6 +44,7 @@
       error = e instanceof Error ? e.message : 'Failed to get statistics';
     } finally {
       loading = false;
+      appState.setBusy(false);
     }
   }
 </script>
