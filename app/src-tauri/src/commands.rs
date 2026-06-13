@@ -6,7 +6,8 @@ use once_cell::sync::Lazy;
 use space_saver_core::hash_cache::HashCache;
 use space_saver_core::skip_cache::{FileFingerprint, SkipCache};
 use space_saver_service::api::{
-    DuplicateGroup, EmptyScanResult, FilterConfig, ScanResult, SimilarGroup, StorageStats,
+    BrokenFile, DuplicateGroup, EmptyScanResult, FilterConfig, ScanResult, SimilarGroup,
+    StorageStats,
 };
 use space_saver_service::ServiceApi;
 use space_saver_service::{DeleteMode, DeleteResult, FileOperations};
@@ -122,6 +123,22 @@ pub async fn empty_folder_check(
     let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
 
     api.find_empty_in_paths(paths, filter)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Find broken (invalid or corrupted) files across multiple paths. Reports
+/// only files that are provably unusable — corrupted/truncated content, or
+/// content that does not match its extension. Empty files are excluded.
+#[tauri::command]
+pub async fn broken_file_check(
+    paths: Vec<String>,
+    filter: Option<FilterConfig>,
+) -> Result<Vec<BrokenFile>, String> {
+    let api = ServiceApi::new();
+    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+
+    api.find_broken_files_in_paths(paths, filter)
         .await
         .map_err(|e| e.to_string())
 }
@@ -831,6 +848,40 @@ mod tests {
             "missing file must be reported as failed"
         );
         assert!(results[1].error.is_some());
+    }
+
+    #[tokio::test]
+    async fn broken_check_finds_corrupted_and_mismatched_files() {
+        let dir = tempfile::tempdir().unwrap();
+        // Truncated JPEG: valid signature, unparseable body
+        fs::write(dir.path().join("truncated.jpg"), [0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
+        // PDF bytes wearing a .png extension
+        fs::write(dir.path().join("fake.png"), b"%PDF-1.7\nnot a png").unwrap();
+        // A healthy noise PNG must not be flagged
+        save_noise_png(&dir.path().join("ok.png"), 32, 32);
+
+        let broken = broken_file_check(paths_of(&dir), None).await.unwrap();
+
+        assert_eq!(broken.len(), 2);
+        assert!(broken.iter().any(|b| b.path.ends_with("truncated.jpg")));
+        assert!(broken.iter().any(|b| b.path.ends_with("fake.png")));
+        assert!(broken.iter().all(|b| !b.reason.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn broken_check_with_no_paths_returns_empty() {
+        let broken = broken_file_check(vec![], None).await.unwrap();
+        assert!(broken.is_empty());
+    }
+
+    #[tokio::test]
+    async fn broken_check_nonexistent_path_yields_no_results() {
+        // Matches the sibling scan-based commands: a missing root is empty,
+        // not an error.
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope").to_string_lossy().to_string();
+        let broken = broken_file_check(vec![missing], None).await.unwrap();
+        assert!(broken.is_empty());
     }
 
     #[tokio::test]

@@ -41,6 +41,13 @@
       color: 'bg-yellow-500 hover:bg-yellow-600'
     },
     {
+      name: 'Broken Files',
+      description: 'Find files that are invalid or corrupted',
+      path: '/broken',
+      icon: '🚫',
+      color: 'bg-orange-500 hover:bg-orange-600'
+    },
+    {
       name: 'Compress',
       description: 'Compress files to save space',
       path: '/compress',

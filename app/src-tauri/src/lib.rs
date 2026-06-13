@@ -16,6 +16,7 @@ pub fn run() {
             empty_folder_check,
             duplicate_file_check,
             similar_file_check,
+            broken_file_check,
             delete_files,
             get_storage_stats,
             get_compression_plugins,

@@ -4,12 +4,13 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ScanResult, DuplicateGroup, SimilarGroup, StorageStats, FileInfo, EmptyScanResult } from "../types";
+import type { ScanResult, DuplicateGroup, SimilarGroup, StorageStats, FileInfo, EmptyScanResult, BrokenFile, BrokenCategory } from "../types";
 import type { FilterConfig } from "../stores/app";
 import { mockScanResult } from "../../mock/scan";
 import { mockFindDuplicates } from "../../mock/duplicates";
 import { mockFindSimilar } from "../../mock/similar";
 import { mockEmptyItems } from "../../mock/empty";
+import { mockFindBroken } from "../../mock/broken";
 import { mockStorageStats } from "../../mock/stats";
 import { mockPlugins, isKnownPlugin } from "../../mock/plugins";
 import { mockSkipCache } from "../../mock/skipCache";
@@ -17,7 +18,7 @@ import { mockSkipCache } from "../../mock/skipCache";
 // Check if running in Tauri environment
 const isTauri = "__TAURI_INTERNALS__" in window;
 
-export { type ScanResult, type DuplicateGroup, type SimilarGroup, type StorageStats, type FileInfo, type FilterConfig, type EmptyScanResult };
+export { type ScanResult, type DuplicateGroup, type SimilarGroup, type StorageStats, type FileInfo, type FilterConfig, type EmptyScanResult, type BrokenFile, type BrokenCategory };
 
 /**
  * Scan multiple directories for files
@@ -80,6 +81,20 @@ export async function findEmptyItems(paths: string[], filter?: FilterConfig): Pr
       empty_files: results.flatMap(r => r.empty_files),
       empty_folders: results.flatMap(r => r.empty_folders),
     };
+  }
+}
+
+/**
+ * Find broken (invalid or corrupted) files across multiple directories.
+ * Reports only files that are provably unusable — corrupted/truncated content
+ * or content that does not match its extension. Empty files are excluded.
+ */
+export async function findBrokenFiles(paths: string[], filter?: FilterConfig): Promise<BrokenFile[]> {
+  if (isTauri) {
+    return await invoke<BrokenFile[]>("broken_file_check", { paths, filter: filter || null });
+  } else {
+    const results = await Promise.all(paths.map(path => mockFindBroken(path)));
+    return results.flat();
   }
 }
 

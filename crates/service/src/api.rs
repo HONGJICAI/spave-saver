@@ -1,6 +1,8 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use space_saver_core::{scanner::DefaultFileScanner, FileFilter, FileInfo, FileScanner};
+use space_saver_core::{
+    scanner::DefaultFileScanner, BrokenCategory, FileFilter, FileInfo, FileScanner,
+};
 use std::path::PathBuf;
 
 /// Filter configuration for file operations
@@ -337,6 +339,58 @@ impl ServiceApi {
         })
     }
 
+    /// Find broken (invalid or corrupted) files across multiple directories
+    /// (primary method). Empty files are excluded — they belong to the Empty
+    /// Files feature, not here. The `filter` applies to files as usual.
+    pub async fn find_broken_files_in_paths(
+        &self,
+        paths: Vec<PathBuf>,
+        filter: Option<FilterConfig>,
+    ) -> Result<Vec<BrokenFile>> {
+        use rayon::prelude::*;
+        use space_saver_core::BrokenFileChecker;
+
+        // Collect files from all paths
+        let mut all_files = Vec::new();
+        for path in paths {
+            let mut files = self.scanner.scan(&path)?;
+
+            // Apply filters if provided
+            if let Some(ref filter_config) = filter {
+                files = filter_config.apply(files);
+            }
+
+            all_files.extend(files);
+        }
+
+        let checker = BrokenFileChecker::new();
+        let broken: Vec<BrokenFile> = all_files
+            .into_par_iter()
+            // Empty files are the Empty Files feature's concern, not corruption
+            .filter(|file| file.size > 0)
+            .filter_map(|file| {
+                checker.check_file(&file.path).map(|reason| BrokenFile {
+                    path: file.path.to_string_lossy().to_string(),
+                    size: file.size,
+                    category: reason.category,
+                    reason: reason.detail,
+                })
+            })
+            .collect();
+
+        Ok(broken)
+    }
+
+    /// Find broken files in a single directory (delegates to
+    /// find_broken_files_in_paths)
+    pub async fn find_broken_files(
+        &self,
+        path: PathBuf,
+        filter: Option<FilterConfig>,
+    ) -> Result<Vec<BrokenFile>> {
+        self.find_broken_files_in_paths(vec![path], filter).await
+    }
+
     /// Get storage statistics across multiple directories (primary method)
     pub async fn get_storage_stats_for_paths(
         &self,
@@ -437,6 +491,17 @@ pub struct EmptyScanResult {
     pub empty_files: Vec<String>,
     /// Topmost directories whose subtree contains no files
     pub empty_folders: Vec<String>,
+}
+
+/// A file found to be invalid or corrupted
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokenFile {
+    pub path: String,
+    pub size: u64,
+    /// "corrupted" or "extension_mismatch"
+    pub category: BrokenCategory,
+    /// Human-readable explanation, worded close to the underlying error
+    pub reason: String,
 }
 
 /// Storage statistics
@@ -916,6 +981,108 @@ mod tests {
                 "Files should be .txt"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_find_broken_files_detects_corruption_and_mismatch() {
+        let dir = TempDir::new().unwrap();
+        // Truncated JPEG: valid signature, unparseable body -> corrupted
+        fs::write(dir.path().join("truncated.jpg"), [0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
+        // PDF bytes wearing a .png extension -> extension mismatch
+        fs::write(dir.path().join("fake.png"), b"%PDF-1.7\nnot a png").unwrap();
+        // A healthy text file is left alone (unknown extension, no claim)
+        fs::write(dir.path().join("notes.txt"), b"all good here").unwrap();
+
+        let api = ServiceApi::new();
+        let broken = api
+            .find_broken_files_in_paths(vec![dir.path().to_path_buf()], None)
+            .await
+            .unwrap();
+
+        assert_eq!(broken.len(), 2, "only the two broken files are reported");
+        let corrupted = broken
+            .iter()
+            .find(|b| b.path.ends_with("truncated.jpg"))
+            .unwrap();
+        assert_eq!(corrupted.category, BrokenCategory::Corrupted);
+        assert!(corrupted.size > 0);
+        let mismatch = broken
+            .iter()
+            .find(|b| b.path.ends_with("fake.png"))
+            .unwrap();
+        assert_eq!(mismatch.category, BrokenCategory::ExtensionMismatch);
+    }
+
+    #[tokio::test]
+    async fn test_find_broken_files_excludes_empty_files() {
+        let dir = TempDir::new().unwrap();
+        // A 0-byte image would have no signature, but empty files belong to
+        // the Empty Files feature and must not be reported as broken here.
+        fs::write(dir.path().join("empty.png"), b"").unwrap();
+
+        let api = ServiceApi::new();
+        let broken = api
+            .find_broken_files_in_paths(vec![dir.path().to_path_buf()], None)
+            .await
+            .unwrap();
+        assert!(broken.is_empty(), "empty files must not be flagged");
+    }
+
+    #[tokio::test]
+    async fn test_find_broken_files_no_results_for_valid_files() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("doc.txt"), b"plain text").unwrap();
+        fs::write(dir.path().join("report.pdf"), b"%PDF-1.7\nbody").unwrap();
+
+        let api = ServiceApi::new();
+        let broken = api
+            .find_broken_files_in_paths(vec![dir.path().to_path_buf()], None)
+            .await
+            .unwrap();
+        assert!(broken.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_find_broken_files_empty_input() {
+        let api = ServiceApi::new();
+        let broken = api.find_broken_files_in_paths(vec![], None).await.unwrap();
+        assert!(broken.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_find_broken_files_nonexistent_path_yields_no_results() {
+        // Like the other scan-based features (scan/duplicates/similar), a
+        // nonexistent root contributes nothing rather than erroring.
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("does-not-exist");
+        let api = ServiceApi::new();
+        let broken = api
+            .find_broken_files_in_paths(vec![missing], None)
+            .await
+            .unwrap();
+        assert!(broken.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_find_broken_files_respects_extension_filter() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("truncated.jpg"), [0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
+        fs::write(dir.path().join("fake.png"), b"%PDF-1.7\nnot a png").unwrap();
+
+        let api = ServiceApi::new();
+        let filter = FilterConfig {
+            min_size: None,
+            max_size: None,
+            extensions: Some(vec!["jpg".to_string()]),
+            file_pattern: None,
+        };
+        let broken = api
+            .find_broken_files_in_paths(vec![dir.path().to_path_buf()], Some(filter))
+            .await
+            .unwrap();
+
+        assert_eq!(broken.len(), 1);
+        assert!(broken[0].path.ends_with("truncated.jpg"));
     }
 
     #[tokio::test]
