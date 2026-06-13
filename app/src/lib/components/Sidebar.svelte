@@ -4,7 +4,8 @@
   import { base } from '$app/paths';
   // @ts-ignore
   import { page } from '$app/stores';
-  
+  import { appState } from '$lib/stores/app';
+
   interface NavItem {
     name: string;
     path: string;
@@ -49,17 +50,23 @@
     <p class="text-sm text-gray-400 mt-1">Disk Space Manager</p>
   </div>
   
-  <nav class="flex-1 p-4">
+  <!-- While an operation is in flight, navigation is blocked (see the
+       beforeNavigate guard in +layout.svelte). We grey the links and swallow
+       clicks so the disabled state is visible, not just silently inert. -->
+  <nav class="flex-1 p-4" aria-busy={$appState.busy}>
     <ul class="space-y-2">
       {#each navItems as item}
         <li>
           <a
             href="{base}{item.path}"
+            aria-disabled={$appState.busy}
+            tabindex={$appState.busy ? -1 : undefined}
+            onclick={(e) => { if ($appState.busy) e.preventDefault(); }}
             class="flex items-center gap-3 px-4 py-3 rounded-lg transition-colors {
               isActive($page.url.pathname, item.path)
                 ? 'bg-blue-600 text-white'
                 : 'hover:bg-gray-700'
-            }"
+            } {$appState.busy ? 'opacity-40 cursor-not-allowed pointer-events-none' : ''}"
           >
             <span class="text-xl">{item.icon}</span>
             <span>{item.name}</span>
@@ -68,6 +75,9 @@
       {/each}
     </ul>
   </nav>
+  {#if $appState.busy}
+    <p class="px-4 -mt-2 mb-2 text-xs text-gray-400">Navigation paused while an operation is running…</p>
+  {/if}
   
   <div class="p-4 border-t border-gray-700 text-sm text-gray-400">
     <p>Mode: <span class="text-green-400" id="app-mode">{mode}</span></p>

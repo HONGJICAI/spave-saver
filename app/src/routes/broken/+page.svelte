@@ -1,16 +1,34 @@
 <script lang="ts">
   import { appState } from '$lib/stores/app';
   import { findBrokenFiles, deleteFiles, fixFileExtensions, type BrokenFile } from '$lib/api';
+  import { loadFromSession, saveToSession, sessionKeys } from '$lib/utils/storage';
+
+  // Session-cached scan results so navigating away and back (or a misclick that
+  // the nav guard blocked, then a deliberate revisit) restores the workflow.
+  interface BrokenCache {
+    broken: BrokenFile[];
+    scanned: boolean;
+    selected: string[];
+  }
+  const cached = loadFromSession<BrokenCache | null>(sessionKeys.BROKEN_RESULT, null);
 
   let loading = $state(false);
-  let broken: BrokenFile[] = $state([]);
-  let scanned = $state(false);
-  let selectedPaths = $state<Set<string>>(new Set());
+  let broken: BrokenFile[] = $state(cached?.broken ?? []);
+  let scanned = $state(cached?.scanned ?? false);
+  let selectedPaths = $state<Set<string>>(new Set(cached?.selected ?? []));
   let showDeleteConfirm = $state(false);
   let deleteInProgress = $state(false);
   let fixInProgress = $state(false);
   let sortBy = $state<'name' | 'size' | 'path'>('name');
   let sortOrder = $state<'asc' | 'desc'>('asc');
+
+  $effect(() => {
+    saveToSession<BrokenCache>(sessionKeys.BROKEN_RESULT, {
+      broken,
+      scanned,
+      selected: Array.from(selectedPaths),
+    });
+  });
 
   async function handleScan() {
     const paths = $appState.scanPaths;
@@ -20,6 +38,7 @@
     }
 
     loading = true;
+    appState.setBusy(true);
     appState.setError(null);
 
     try {
@@ -30,6 +49,7 @@
       appState.setError(err instanceof Error ? err.message : 'Failed to scan for broken files');
     } finally {
       loading = false;
+      appState.setBusy(false);
     }
   }
 
@@ -69,6 +89,7 @@
     if (targets.length === 0) return;
 
     deleteInProgress = true;
+    appState.setBusy(true);
     try {
       // Defaults to the system trash; only successfully removed items leave
       // the list so any per-file failures stay visible.
@@ -85,6 +106,7 @@
       appState.setError(err instanceof Error ? err.message : 'Failed to delete files');
     } finally {
       deleteInProgress = false;
+      appState.setBusy(false);
     }
   }
 
@@ -95,6 +117,7 @@
     if (targets.length === 0) return;
 
     fixInProgress = true;
+    appState.setBusy(true);
     try {
       const results = await fixFileExtensions(targets);
       const fixed = new Set(results.filter((r) => r.success).map((r) => r.path));
@@ -108,6 +131,7 @@
       appState.setError(err instanceof Error ? err.message : 'Failed to fix extensions');
     } finally {
       fixInProgress = false;
+      appState.setBusy(false);
     }
   }
 

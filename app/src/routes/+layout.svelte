@@ -3,12 +3,28 @@
   import Sidebar from '$lib/components/Sidebar.svelte';
   import PathSelector from '$lib/components/PathSelector.svelte';
   import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
+  // @ts-ignore
+  import { beforeNavigate } from '$app/navigation';
   import { getModeName } from '$lib/api';
-  
+  import { appState } from '$lib/stores/app';
+
   onMount(() => {
     const modeEl = document.getElementById('app-mode');
     if (modeEl) {
       modeEl.textContent = getModeName();
+    }
+  });
+
+  // Block client-side navigation while a scan/delete/fix/compress is in flight.
+  // Leaving a page mid-operation would unmount it, discard its in-memory
+  // progress, and orphan the still-running promise (its result would be written
+  // to destroyed component state). The Sidebar greys its links to signal this;
+  // this guard is the actual enforcement and also covers in-page links (e.g.
+  // the Home quick actions) that the visual cue doesn't reach.
+  beforeNavigate((navigation: { cancel: () => void }) => {
+    if (get(appState).busy) {
+      navigation.cancel();
     }
   });
 </script>
