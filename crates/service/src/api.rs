@@ -236,62 +236,91 @@ impl ServiceApi {
         self.find_duplicates_in_paths(vec![path], filter).await
     }
 
-    /// Find similar images across multiple directories (primary method)
-    pub async fn find_similar_images_in_paths(
+    /// Find similar media across multiple directories (primary method).
+    ///
+    /// `media_types` selects which kinds to scan; an empty list defaults to
+    /// images. Image similarity uses perceptual hashing. Video similarity is
+    /// not yet implemented (it needs ffmpeg — see `video_sim.rs`); requesting
+    /// `MediaKind::Video` currently contributes no groups rather than erroring,
+    /// so a mixed request still returns its image results.
+    pub async fn find_similar_media_in_paths(
         &self,
         paths: Vec<PathBuf>,
         threshold: f32,
+        media_types: Vec<MediaKind>,
         filter: Option<FilterConfig>,
     ) -> Result<Vec<SimilarGroup>> {
         use space_saver_core::{
             image_sim::SimilarityAlgorithm, scanner::FileType, ImageSimilarity,
         };
 
-        // Collect image files from all paths
-        let mut image_files = Vec::new();
-        for path in paths {
-            let mut files = self.scanner.scan(&path)?;
+        // Nothing requested means "images" — the only kind implemented today
+        let media_types = if media_types.is_empty() {
+            vec![MediaKind::Image]
+        } else {
+            media_types
+        };
 
-            // Apply filters if provided
-            if let Some(ref filter_config) = filter {
-                files = filter_config.apply(files);
-            }
-
-            let mut images: Vec<_> = files
-                .into_iter()
-                .filter(|f| matches!(f.file_type, FileType::Image))
-                .collect();
-            image_files.append(&mut images);
-        }
-
-        let similarity = ImageSimilarity::new();
         let mut similar_groups = Vec::new();
 
-        // Simple pairwise comparison (can be optimized)
-        for i in 0..image_files.len() {
-            for j in (i + 1)..image_files.len() {
-                if let Ok(score) = similarity.compare(&image_files[i].path, &image_files[j].path) {
-                    if score >= threshold {
-                        similar_groups.push(SimilarGroup {
-                            files: vec![image_files[i].clone(), image_files[j].clone()],
-                            similarity_score: score,
-                        });
+        if media_types.contains(&MediaKind::Image) {
+            // Collect image files from all paths
+            let mut image_files = Vec::new();
+            for path in &paths {
+                let mut files = self.scanner.scan(path)?;
+
+                // Apply filters if provided
+                if let Some(ref filter_config) = filter {
+                    files = filter_config.apply(files);
+                }
+
+                image_files.extend(
+                    files
+                        .into_iter()
+                        .filter(|f| matches!(f.file_type, FileType::Image)),
+                );
+            }
+
+            let similarity = ImageSimilarity::new();
+
+            // Simple pairwise comparison (can be optimized)
+            for i in 0..image_files.len() {
+                for j in (i + 1)..image_files.len() {
+                    if let Ok(score) =
+                        similarity.compare(&image_files[i].path, &image_files[j].path)
+                    {
+                        if score >= threshold {
+                            similar_groups.push(SimilarGroup {
+                                media_kind: MediaKind::Image,
+                                files: vec![
+                                    SimilarFile::from_image(&image_files[i]),
+                                    SimilarFile::from_image(&image_files[j]),
+                                ],
+                                similarity_score: score,
+                            });
+                        }
                     }
                 }
             }
         }
 
+        // MediaKind::Video intentionally produces no groups for now: video
+        // similarity requires ffmpeg-based frame sampling which is not yet
+        // wired up. The frontend keeps the Videos option disabled accordingly.
+
         Ok(similar_groups)
     }
 
-    /// Find similar images in a single directory (delegates to find_similar_images_in_paths)
-    pub async fn find_similar_images(
+    /// Find similar media in a single directory (delegates to
+    /// find_similar_media_in_paths).
+    pub async fn find_similar_media(
         &self,
         path: PathBuf,
         threshold: f32,
+        media_types: Vec<MediaKind>,
         filter: Option<FilterConfig>,
     ) -> Result<Vec<SimilarGroup>> {
-        self.find_similar_images_in_paths(vec![path], threshold, filter)
+        self.find_similar_media_in_paths(vec![path], threshold, media_types, filter)
             .await
     }
 
@@ -478,10 +507,54 @@ pub struct DuplicateGroup {
     pub wasted_space: u64,
 }
 
-/// Similar image group
+/// Kind of media a similar-group is made of. A group is homogeneous: all its
+/// files are the same kind, so the frontend can pick the right preview widget
+/// and "keep best" heuristic per group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MediaKind {
+    Image,
+    Video,
+}
+
+/// One file inside a similar-group. Unlike the bare `FileInfo`, this carries
+/// the pixel dimensions the UI needs to show resolution and to offer
+/// "keep the highest-resolution copy". `path` is a string for the frontend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimilarFile {
+    pub path: String,
+    pub size: u64,
+    pub modified: i64,
+    /// Pixel width, when it could be read from the file header
+    pub width: Option<u32>,
+    /// Pixel height, when it could be read from the file header
+    pub height: Option<u32>,
+}
+
+impl SimilarFile {
+    /// Build from a scanned `FileInfo`, reading image dimensions from the
+    /// header (cheap, no full decode). Dimensions are `None` for files whose
+    /// size can't be read (e.g. video, until ffmpeg lands).
+    fn from_image(file: &FileInfo) -> Self {
+        let (width, height) = match space_saver_core::image_dimensions(&file.path) {
+            Some((w, h)) => (Some(w), Some(h)),
+            None => (None, None),
+        };
+        Self {
+            path: file.path.to_string_lossy().to_string(),
+            size: file.size,
+            modified: file.modified,
+            width,
+            height,
+        }
+    }
+}
+
+/// Similar media group (images today; videos once ffmpeg-backed video
+/// similarity is implemented). All files in a group are `media_kind`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimilarGroup {
-    pub files: Vec<FileInfo>,
+    pub media_kind: MediaKind,
+    pub files: Vec<SimilarFile>,
     pub similarity_score: f32,
 }
 
@@ -526,6 +599,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::io::Write;
+    use std::path::Path;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -1119,5 +1193,136 @@ mod tests {
             "Should find 1 duplicate group across directories"
         );
         assert_eq!(duplicates[0].count, 2);
+    }
+
+    /// A grayscale diagonal gradient: non-uniform so its perceptual hash is
+    /// distinctive (a flat color would hash the same as any other flat color).
+    fn save_gradient_png(path: &Path, w: u32, h: u32) {
+        use image::{ImageBuffer, Rgb};
+        let img: image::RgbImage = ImageBuffer::from_fn(w, h, |x, y| {
+            let v = ((x * 255 / w.max(1)) + (y * 255 / h.max(1))) as u8;
+            Rgb([v, v, v])
+        });
+        img.save(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn find_similar_media_groups_identical_images_with_dimensions() {
+        let dir = TempDir::new().unwrap();
+        // Two byte-identical images (perceptual distance 0 -> score 1.0)
+        save_gradient_png(&dir.path().join("a.png"), 64, 48);
+        std::fs::copy(dir.path().join("a.png"), dir.path().join("b.png")).unwrap();
+
+        let api = ServiceApi::new();
+        let groups = api
+            .find_similar_media_in_paths(
+                vec![dir.path().to_path_buf()],
+                0.9,
+                vec![MediaKind::Image],
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(groups.len(), 1, "the identical pair forms one group");
+        let group = &groups[0];
+        assert_eq!(group.media_kind, MediaKind::Image);
+        assert_eq!(group.files.len(), 2);
+        assert!((group.similarity_score - 1.0).abs() < f32::EPSILON);
+        // Dimensions are read from the image header for every file
+        for file in &group.files {
+            assert_eq!(file.width, Some(64));
+            assert_eq!(file.height, Some(48));
+        }
+    }
+
+    #[tokio::test]
+    async fn find_similar_media_threshold_one_keeps_identical_pair() {
+        let dir = TempDir::new().unwrap();
+        save_gradient_png(&dir.path().join("a.png"), 32, 32);
+        std::fs::copy(dir.path().join("a.png"), dir.path().join("b.png")).unwrap();
+
+        let api = ServiceApi::new();
+        // Exact-only threshold (1.0): an identical pair scores exactly 1.0
+        let groups = api
+            .find_similar_media_in_paths(
+                vec![dir.path().to_path_buf()],
+                1.0,
+                vec![MediaKind::Image],
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(groups.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn find_similar_media_empty_types_defaults_to_images() {
+        let dir = TempDir::new().unwrap();
+        save_gradient_png(&dir.path().join("a.png"), 32, 32);
+        std::fs::copy(dir.path().join("a.png"), dir.path().join("b.png")).unwrap();
+
+        let api = ServiceApi::new();
+        let groups = api
+            .find_similar_media_in_paths(vec![dir.path().to_path_buf()], 0.9, vec![], None)
+            .await
+            .unwrap();
+        assert_eq!(groups.len(), 1, "empty media_types defaults to images");
+    }
+
+    #[tokio::test]
+    async fn find_similar_media_video_only_yields_no_groups() {
+        let dir = TempDir::new().unwrap();
+        // Even with similar images present, a video-only request finds nothing
+        // because video similarity is not implemented yet.
+        save_gradient_png(&dir.path().join("a.png"), 32, 32);
+        std::fs::copy(dir.path().join("a.png"), dir.path().join("b.png")).unwrap();
+
+        let api = ServiceApi::new();
+        let groups = api
+            .find_similar_media_in_paths(
+                vec![dir.path().to_path_buf()],
+                0.9,
+                vec![MediaKind::Video],
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(groups.is_empty());
+    }
+
+    #[tokio::test]
+    async fn find_similar_media_nonexistent_path_yields_no_groups() {
+        // Like the other scan-based features, a missing root contributes
+        // nothing rather than erroring.
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("does-not-exist");
+        let api = ServiceApi::new();
+        let groups = api
+            .find_similar_media_in_paths(vec![missing], 0.9, vec![MediaKind::Image], None)
+            .await
+            .unwrap();
+        assert!(groups.is_empty());
+    }
+
+    #[tokio::test]
+    async fn find_similar_media_excludes_non_images() {
+        let dir = TempDir::new().unwrap();
+        // A pair of identical text files must not form a similarity group:
+        // only image files are compared.
+        std::fs::write(dir.path().join("a.txt"), b"same text").unwrap();
+        std::fs::write(dir.path().join("b.txt"), b"same text").unwrap();
+
+        let api = ServiceApi::new();
+        let groups = api
+            .find_similar_media_in_paths(
+                vec![dir.path().to_path_buf()],
+                0.9,
+                vec![MediaKind::Image],
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(groups.is_empty());
     }
 }

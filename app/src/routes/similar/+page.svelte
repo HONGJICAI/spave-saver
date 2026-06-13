@@ -1,116 +1,192 @@
 <script lang="ts">
   import { appState } from '$lib/stores/app';
-  import { findSimilarImages, deleteFiles } from '$lib/api';
-  import type { SimilarGroup } from '$lib/api';
+  import {
+    findSimilarMedia,
+    deleteFiles,
+    type SimilarGroup,
+    type MediaKind,
+    type DeleteMode,
+    type DeleteResult,
+  } from '$lib/api';
   import { formatSize } from '$lib/utils/format';
+  import StatCard from '$lib/components/StatCard.svelte';
+  import Thumbnail from './Thumbnail.svelte';
+  import {
+    bestFile,
+    selectAllButBest,
+    fullySelectedGroups,
+    keepBestPerGroup,
+    applyDeletions,
+    reclaimableSize,
+    potentialSavings,
+    type KeepStrategy,
+  } from '$lib/utils/similar';
 
   let loading = $state(false);
-  let groups: SimilarGroup[] = $state([]);
+  let error = $state('');
+  let hasScanned = $state(false);
+  let groups = $state<SimilarGroup[]>([]);
   let threshold = $state(0.9);
-  let selectedFiles = $state<Set<string>>(new Set());
-  let showDeleteConfirm = $state(false);
-  let deleteInProgress = $state(false);
+  let selected = $state<Set<string>>(new Set());
+  let sortBy = $state<'similarity' | 'savings'>('similarity');
+  let keepStrategy = $state<KeepStrategy>('resolution');
+
+  // Media-type selector. Images is the only implemented kind today; video
+  // similarity needs ffmpeg (see crates/core/src/video_sim.rs), so its toggle
+  // is disabled until that lands.
+  let scanImages = $state(true);
+  let mediaTypes = $derived<MediaKind[]>(scanImages ? ['Image'] : []);
+
+  // Delete flow
+  let showConfirm = $state(false);
+  let deleteMode = $state<DeleteMode>('trash');
+  let allowFullGroups = $state(false);
+  let deleting = $state(false);
+  let lastResults = $state<DeleteResult[] | null>(null);
+
+  let sizeByPath = $derived.by(() => {
+    const map = new Map<string, number>();
+    for (const group of groups) {
+      for (const file of group.files) map.set(file.path, file.size);
+    }
+    return map;
+  });
+
+  let selectedSize = $derived(reclaimableSize(groups, selected));
+  let potential = $derived(potentialSavings(groups));
+  let endangeredGroups = $derived(fullySelectedGroups(groups, selected));
+
+  let sortedGroups = $derived.by(() => {
+    const sorted = [...groups];
+    switch (sortBy) {
+      case 'savings':
+        return sorted.sort(
+          (a, b) =>
+            b.files.reduce((s, f) => s + f.size, 0) - b.files.reduce((m, f) => Math.max(m, f.size), 0) -
+            (a.files.reduce((s, f) => s + f.size, 0) - a.files.reduce((m, f) => Math.max(m, f.size), 0))
+        );
+      case 'similarity':
+      default:
+        return sorted.sort((a, b) => b.similarity_score - a.similarity_score);
+    }
+  });
 
   async function handleScan() {
-    // Use scanPaths
-    const paths = $appState.scanPaths;
-
-    if (paths.length === 0) {
-      appState.setError('Please select at least one directory first');
+    if ($appState.scanPaths.length === 0) {
+      error = 'Please add at least one directory to scan first';
+      return;
+    }
+    if (mediaTypes.length === 0) {
+      error = 'Select at least one media type to scan';
       return;
     }
 
     loading = true;
-    appState.setError(null);
+    error = '';
+    groups = [];
+    selected = new Set();
+    lastResults = null;
+    showConfirm = false;
 
     try {
-      groups = await findSimilarImages(paths, threshold, $appState.filterConfig);
-    } catch (err) {
-      appState.setError(err instanceof Error ? err.message : 'Failed to find similar images');
+      groups = await findSimilarMedia($appState.scanPaths, threshold, mediaTypes, $appState.filterConfig);
+      hasScanned = true;
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to find similar media';
     } finally {
       loading = false;
     }
   }
 
   function toggleFile(path: string) {
-    const newSelected = new Set(selectedFiles);
-    if (newSelected.has(path)) {
-      newSelected.delete(path);
-    } else {
-      newSelected.add(path);
-    }
-    selectedFiles = newSelected;
+    const next = new Set(selected);
+    if (next.has(path)) next.delete(path);
+    else next.add(path);
+    selected = next;
   }
 
-  function selectAllInGroup(group: SimilarGroup, exceptFirst: boolean = true) {
-    const newSelected = new Set(selectedFiles);
-    const filesToSelect = exceptFirst ? group.files.slice(1) : group.files;
-    filesToSelect.forEach(file => newSelected.add(file.path));
-    selectedFiles = newSelected;
+  function autoSelect() {
+    selected = selectAllButBest(groups, keepStrategy);
   }
 
   function clearSelection() {
-    selectedFiles = new Set();
+    selected = new Set();
+  }
+
+  function openConfirm() {
+    allowFullGroups = false;
+    lastResults = null;
+    showConfirm = true;
   }
 
   async function handleDelete() {
-    if (selectedFiles.size === 0) return;
-
-    deleteInProgress = true;
+    deleting = true;
+    error = '';
     try {
-      // Only files actually deleted leave the UI; failures stay selected
-      const results = await deleteFiles(Array.from(selectedFiles));
-      const deleted = new Set(results.filter(r => r.success).map(r => r.path));
-      const failed = results.filter(r => !r.success);
+      const results = await deleteFiles(Array.from(selected), deleteMode);
+      lastResults = results;
 
-      groups = groups.map(group => ({
-        ...group,
-        files: group.files.filter(f => !deleted.has(f.path))
-      })).filter(group => group.files.length > 1);
+      const deletedPaths = new Set(results.filter((r) => r.success).map((r) => r.path));
+      groups = applyDeletions(groups, deletedPaths);
 
-      selectedFiles = new Set(failed.map(r => r.path));
-      showDeleteConfirm = false;
-      if (failed.length > 0) {
-        $appState.error = `Failed to delete ${failed.length} file(s): ${failed[0].error ?? 'unknown error'}`;
-      }
-    } catch (err) {
-      $appState.error = err instanceof Error ? err.message : 'Failed to delete files';
+      // Keep only failed paths selected so the user can retry or inspect them
+      selected = new Set(results.filter((r) => !r.success).map((r) => r.path));
+      showConfirm = false;
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to delete files';
     } finally {
-      deleteInProgress = false;
+      deleting = false;
     }
   }
 
-  function getTotalWaste(): number {
-    return groups.reduce((total, group) => {
-      // Each group wastes space equal to (n-1) copies of the file
-      return total + (group.files[0].size * (group.files.length - 1));
-    }, 0);
+  function resolutionLabel(width?: number | null, height?: number | null): string {
+    if (width == null || height == null) return 'unknown size';
+    const mp = (width * height) / 1_000_000;
+    return `${width}×${height} (${mp.toFixed(1)} MP)`;
   }
+
+  let deletedCount = $derived(lastResults?.filter((r) => r.success).length ?? 0);
+  let failedResults = $derived(lastResults?.filter((r) => !r.success) ?? []);
+  let deletedSize = $derived(
+    lastResults?.filter((r) => r.success).reduce((sum, r) => sum + (sizeByPath.get(r.path) ?? 0), 0) ?? 0
+  );
 </script>
 
-<div class="p-6">
-  <div class="mb-6">
-    <h1 class="text-3xl font-bold text-gray-900 mb-2">Similar Images Finder</h1>
-    <p class="text-gray-600">Find visually similar images that may be duplicates</p>
-  </div>
+<svelte:head>
+  <title>Similar Media - Space-Saver</title>
+</svelte:head>
 
-  {#if $appState.error}
-    <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-      {$appState.error}
-    </div>
-  {/if}
+<div class="max-w-7xl">
+  <h1 class="text-3xl font-bold text-gray-900 mb-2">🖼️ Find Similar Media</h1>
+  <p class="text-gray-600 mb-6">Find visually similar images so you can keep the best copy and delete the rest.</p>
 
+  <!-- Scan configuration -->
   <div class="bg-white rounded-lg shadow p-6 mb-6">
-    <div class="flex items-center gap-4">
-      <div class="flex-1">
-        <label class="block text-sm font-medium text-gray-700 mb-2">
-          Similarity Threshold: {(threshold * 100).toFixed(0)}%
+    <div class="flex flex-col gap-4">
+      <div>
+        <span class="block text-sm font-medium text-gray-700 mb-2">Scan for:</span>
+        <div class="flex flex-wrap gap-4">
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" bind:checked={scanImages} class="rounded" />
+            <span class="text-sm text-gray-800">Images</span>
+          </label>
+          <label class="flex items-center gap-2 cursor-not-allowed opacity-60" title="Video similarity is coming soon">
+            <input type="checkbox" checked={false} disabled class="rounded" />
+            <span class="text-sm text-gray-500">Videos <span class="text-xs">(coming soon)</span></span>
+          </label>
+        </div>
+      </div>
+
+      <div>
+        <label for="threshold" class="block text-sm font-medium text-gray-700 mb-2">
+          Similarity threshold: {(threshold * 100).toFixed(0)}%
         </label>
-        <input 
-          type="range" 
-          min="0.7" 
-          max="1.0" 
-          step="0.05" 
+        <input
+          id="threshold"
+          type="range"
+          min="0.7"
+          max="1.0"
+          step="0.05"
           bind:value={threshold}
           class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
         />
@@ -119,120 +195,232 @@
           <span>Exact only (100%)</span>
         </div>
       </div>
+
       <button
         onclick={handleScan}
-        disabled={loading || $appState.scanPaths.length === 0}
-        class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed whitespace-nowrap"
+        disabled={loading || $appState.scanPaths.length === 0 || mediaTypes.length === 0}
+        class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed w-full"
       >
-        {loading ? 'Scanning...' : 'Scan for Similar Images'}
+        {loading ? '⏳ Scanning…' : '🔍 Scan for Similar Media'}
       </button>
+
+      {#if error}
+        <div class="p-4 bg-red-50 text-red-700 rounded-lg">⚠️ {error}</div>
+      {/if}
     </div>
   </div>
 
-  {#if groups.length > 0}
-    <div class="bg-white rounded-lg shadow p-6 mb-6">
-      <div class="flex justify-between items-center">
-        <div>
-          <h2 class="text-xl font-semibold">
-            Found {groups.length} groups of similar images
-          </h2>
-          <p class="text-gray-600 mt-1">
-            Potential space savings: <span class="font-semibold text-green-600">{formatSize(getTotalWaste())}</span>
-          </p>
-        </div>
-        {#if selectedFiles.size > 0}
-          <div class="flex gap-2">
-            <button
-              onclick={clearSelection}
-              class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
-            >
-              Clear Selection ({selectedFiles.size})
-            </button>
-            <button
-              onclick={() => showDeleteConfirm = true}
-              class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
-            >
-              Delete Selected
-            </button>
-          </div>
+  <!-- Last delete results -->
+  {#if lastResults}
+    <div class="bg-white rounded-lg shadow p-4 mb-6">
+      <p class="text-sm text-gray-800">
+        {#if deleteMode === 'trash'}
+          ✅ Moved <strong>{deletedCount}</strong> file{deletedCount !== 1 ? 's' : ''} to the system trash
+          ({formatSize(deletedSize)} — freed once the trash is emptied).
+        {:else}
+          ✅ Permanently deleted <strong>{deletedCount}</strong> file{deletedCount !== 1 ? 's' : ''} ({formatSize(deletedSize)}).
         {/if}
-      </div>
+      </p>
+      {#if failedResults.length > 0}
+        <div class="mt-3 p-3 bg-red-50 border border-red-200 rounded">
+          <p class="text-sm font-semibold text-red-800 mb-2">
+            {failedResults.length} file{failedResults.length !== 1 ? 's' : ''} could not be deleted (still selected below):
+          </p>
+          <ul class="space-y-1 max-h-[20vh] overflow-y-auto">
+            {#each failedResults as result}
+              <li class="text-xs text-red-700">
+                <span class="font-mono">{result.path}</span>
+                <span class="text-red-500"> — {result.error ?? 'unknown error'}</span>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
+    </div>
+  {/if}
+
+  {#if groups.length > 0}
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      <StatCard label="Similar Groups" value={groups.length} icon="🖼️" color="yellow" />
+      <StatCard label="Potential Savings" value={formatSize(potential)} icon="💾" color="green" />
+      <StatCard label="Selected" value={`${selected.size} (${formatSize(selectedSize)})`} icon="✓" color="blue" />
     </div>
 
+    <!-- Toolbar -->
+    <div class="bg-white rounded-lg shadow p-4 mb-6 flex flex-wrap items-center gap-3">
+      <span class="text-sm font-medium text-gray-700">Auto-select all but the best, keeping the</span>
+      <select
+        bind:value={keepStrategy}
+        aria-label="Which copy to keep"
+        class="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+      >
+        <option value="resolution">highest resolution</option>
+        <option value="size">largest file</option>
+        <option value="newest">newest file</option>
+      </select>
+      <button
+        onclick={autoSelect}
+        class="px-3 py-1.5 text-sm border border-blue-300 text-blue-700 rounded hover:bg-blue-50"
+      >
+        Select duplicates
+      </button>
+      {#if selected.size > 0}
+        <button
+          onclick={clearSelection}
+          class="px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded hover:bg-gray-50"
+        >
+          Clear selection
+        </button>
+      {/if}
+
+      <div class="flex-1"></div>
+
+      <label for="sort-select" class="text-sm font-medium text-gray-700">Sort by:</label>
+      <select
+        id="sort-select"
+        bind:value={sortBy}
+        class="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+      >
+        <option value="similarity">Similarity</option>
+        <option value="savings">Potential savings</option>
+      </select>
+
+      <button
+        onclick={openConfirm}
+        disabled={selected.size === 0 || deleting}
+        class="px-5 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium"
+      >
+        🗑️ Delete Selected ({selected.size})
+      </button>
+    </div>
+
+    <!-- Delete confirmation panel -->
+    {#if showConfirm}
+      <div class="bg-white rounded-lg shadow border-2 border-red-200 p-5 mb-6">
+        <h3 class="text-base font-bold text-gray-900 mb-3">
+          Delete {selected.size} file{selected.size !== 1 ? 's' : ''} ({formatSize(selectedSize)})?
+        </h3>
+
+        <div class="space-y-2 mb-4">
+          <label class="flex items-start gap-2 cursor-pointer">
+            <input type="radio" bind:group={deleteMode} value="trash" class="mt-1" />
+            <span class="text-sm">
+              <span class="font-medium text-gray-800">Move to system trash</span>
+              <span class="text-gray-600"> — recoverable; space is freed once the trash is emptied</span>
+            </span>
+          </label>
+          <label class="flex items-start gap-2 cursor-pointer">
+            <input type="radio" bind:group={deleteMode} value="permanent" class="mt-1" />
+            <span class="text-sm">
+              <span class="font-medium text-red-700">Delete permanently</span>
+              <span class="text-gray-600"> — cannot be undone</span>
+            </span>
+          </label>
+        </div>
+
+        {#if endangeredGroups.length > 0}
+          <div class="mb-4 p-3 bg-amber-50 border border-amber-300 rounded">
+            <p class="text-sm font-semibold text-amber-800">
+              ⚠️ In {endangeredGroups.length} group{endangeredGroups.length !== 1 ? 's' : ''} EVERY copy is selected —
+              deleting would lose that image entirely.
+            </p>
+            <div class="mt-2 flex flex-wrap items-center gap-3">
+              <button
+                onclick={() => (selected = keepBestPerGroup(groups, selected, keepStrategy))}
+                class="px-3 py-1.5 text-xs font-medium bg-amber-600 text-white rounded hover:bg-amber-700"
+              >
+                Keep the best copy in each group
+              </button>
+              <label class="flex items-center gap-2 cursor-pointer text-xs text-amber-800">
+                <input type="checkbox" bind:checked={allowFullGroups} />
+                I understand, delete every copy anyway
+              </label>
+            </div>
+          </div>
+        {/if}
+
+        <div class="flex items-center justify-end gap-3">
+          <button
+            onclick={() => (showConfirm = false)}
+            disabled={deleting}
+            class="px-4 py-2 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onclick={handleDelete}
+            disabled={deleting || selected.size === 0 || (endangeredGroups.length > 0 && !allowFullGroups)}
+            class="px-5 py-2 text-sm bg-red-600 text-white rounded hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium"
+          >
+            {deleting ? 'Deleting…' : deleteMode === 'trash' ? 'Move to Trash' : 'Delete Permanently'}
+          </button>
+        </div>
+      </div>
+    {/if}
+
+    <!-- Groups -->
     <div class="space-y-6">
-      {#each groups as group, idx}
+      {#each sortedGroups as group, idx (idx)}
+        {@const keep = bestFile(group.files, keepStrategy)}
         <div class="bg-white rounded-lg shadow p-6">
-          <div class="flex justify-between items-center mb-4">
+          <div class="flex items-center justify-between mb-4 gap-2">
             <h3 class="text-lg font-semibold text-gray-900">
-              Group {idx + 1} - {group.files.length} similar images ({(group.similarity_score * 100).toFixed(1)}% similar)
+              {group.files.length} similar images
+              <span class="text-sm font-normal text-gray-500">({(group.similarity_score * 100).toFixed(1)}% similar)</span>
             </h3>
             <button
-              onclick={() => selectAllInGroup(group, true)}
-              class="text-sm text-blue-600 hover:text-blue-800"
+              onclick={() => {
+                const next = new Set(selected);
+                for (const f of group.files) if (f.path !== keep.path) next.add(f.path);
+                selected = next;
+              }}
+              class="text-sm text-blue-600 hover:text-blue-800 whitespace-nowrap"
             >
-              Select duplicates (keep first)
+              Select duplicates (keep best)
             </button>
           </div>
 
           <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            {#each group.files as file, fileIdx}
-              <div 
-                class="border-2 rounded-lg p-3 cursor-pointer transition-all {selectedFiles.has(file.path) ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}"
+            {#each group.files as file (file.path)}
+              {@const isKeep = file.path === keep.path}
+              <button
+                type="button"
                 onclick={() => toggleFile(file.path)}
+                class="text-left border-2 rounded-lg p-3 transition-all {selected.has(file.path)
+                  ? 'border-red-400 bg-red-50'
+                  : 'border-gray-200 hover:border-gray-300'}"
               >
-                <div class="aspect-square bg-gray-200 rounded mb-2 flex items-center justify-center">
-                  <svg class="w-16 h-16 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
-                  </svg>
-                </div>
+                <Thumbnail path={file.path} alt={file.path} />
                 <div class="text-xs">
-                  <p class="font-medium text-gray-900 truncate" title={file.path}>{file.path}</p>
-                  <p class="text-gray-500 mt-1">{formatSize(file.size)}</p>
-                  {#if fileIdx === 0}
-                    <span class="inline-block mt-2 px-2 py-1 text-xs bg-green-100 text-green-800 rounded">Original</span>
-                  {/if}
+                  <p class="font-medium text-gray-900 truncate" title={file.path}>
+                    {file.path.split('/').pop()}
+                  </p>
+                  <p class="text-gray-500 mt-1">{resolutionLabel(file.width, file.height)}</p>
+                  <p class="text-gray-500">{formatSize(file.size)} • {new Date(file.modified * 1000).toLocaleDateString()}</p>
+                  <div class="mt-2 flex items-center gap-1">
+                    {#if isKeep}
+                      <span class="inline-block px-2 py-0.5 bg-green-100 text-green-800 rounded">Best — keep</span>
+                    {/if}
+                    {#if selected.has(file.path)}
+                      <span class="inline-block px-2 py-0.5 bg-red-100 text-red-800 rounded">Selected</span>
+                    {/if}
+                  </div>
                 </div>
-              </div>
+              </button>
             {/each}
           </div>
         </div>
       {/each}
     </div>
+  {:else if !loading && hasScanned}
+    <div class="bg-white rounded-lg shadow p-12 text-center text-gray-500">
+      <p class="text-xl mb-2">No similar media found</p>
+      <p class="text-sm">Nothing in the scanned paths looks alike at this threshold 🎉</p>
+    </div>
   {:else if !loading}
-    <div class="bg-white rounded-lg shadow p-12 text-center">
-      <svg class="w-16 h-16 text-gray-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
-      </svg>
-      <p class="text-gray-500">No similar images found. Scan a directory to get started.</p>
+    <div class="bg-white rounded-lg shadow p-12 text-center text-gray-500">
+      <p class="text-xl mb-2">Ready to scan</p>
+      <p class="text-sm">Scan a directory to find visually similar images</p>
     </div>
   {/if}
 </div>
-
-<!-- Delete Confirmation Dialog -->
-{#if showDeleteConfirm}
-  <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-    <div class="bg-white rounded-lg p-6 max-w-md w-full mx-4">
-      <h3 class="text-lg font-semibold mb-2">Confirm Deletion</h3>
-      <p class="text-gray-600 mb-4">
-        Are you sure you want to delete {selectedFiles.size} file{selectedFiles.size !== 1 ? 's' : ''}?
-        This action cannot be undone.
-      </p>
-      <div class="flex gap-2 justify-end">
-        <button
-          onclick={() => showDeleteConfirm = false}
-          disabled={deleteInProgress}
-          class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
-        >
-          Cancel
-        </button>
-        <button
-          onclick={handleDelete}
-          disabled={deleteInProgress}
-          class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
-        >
-          {deleteInProgress ? 'Deleting...' : 'Delete'}
-        </button>
-      </div>
-    </div>
-  </div>
-{/if}

@@ -4,11 +4,11 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ScanResult, DuplicateGroup, SimilarGroup, StorageStats, FileInfo, EmptyScanResult, BrokenFile, BrokenCategory, FixExtensionResult } from "../types";
+import type { ScanResult, DuplicateGroup, SimilarGroup, SimilarFile, MediaKind, StorageStats, FileInfo, EmptyScanResult, BrokenFile, BrokenCategory, FixExtensionResult } from "../types";
 import type { FilterConfig } from "../stores/app";
 import { mockScanResult } from "../../mock/scan";
 import { mockFindDuplicates } from "../../mock/duplicates";
-import { mockFindSimilar } from "../../mock/similar";
+import { mockFindSimilarMedia, mockImageThumbnail } from "../../mock/similar";
 import { mockEmptyItems } from "../../mock/empty";
 import { mockFindBroken, mockFixExtensions } from "../../mock/broken";
 import { mockStorageStats } from "../../mock/stats";
@@ -18,7 +18,7 @@ import { mockSkipCache } from "../../mock/skipCache";
 // Check if running in Tauri environment
 const isTauri = "__TAURI_INTERNALS__" in window;
 
-export { type ScanResult, type DuplicateGroup, type SimilarGroup, type StorageStats, type FileInfo, type FilterConfig, type EmptyScanResult, type BrokenFile, type BrokenCategory, type FixExtensionResult };
+export { type ScanResult, type DuplicateGroup, type SimilarGroup, type SimilarFile, type MediaKind, type StorageStats, type FileInfo, type FilterConfig, type EmptyScanResult, type BrokenFile, type BrokenCategory, type FixExtensionResult };
 
 /**
  * Scan multiple directories for files
@@ -52,18 +52,41 @@ export async function findDuplicates(paths: string[], filter?: FilterConfig): Pr
 }
 
 /**
- * Find similar images across multiple directories
+ * Find similar media across multiple directories. `mediaTypes` selects which
+ * kinds to scan ("Image"/"Video"); an empty list defaults to images on the
+ * backend. Video similarity is not implemented yet (the backend returns no
+ * video groups), so the UI keeps the Videos option disabled.
  */
-export async function findSimilarImages(
+export async function findSimilarMedia(
   paths: string[],
   threshold: number = 0.9,
+  mediaTypes: MediaKind[] = ["Image"],
   filter?: FilterConfig
 ): Promise<SimilarGroup[]> {
   if (isTauri) {
-    return await invoke<SimilarGroup[]>("similar_file_check", { paths, threshold, filter: filter || null });
+    return await invoke<SimilarGroup[]>("find_similar_media", {
+      paths,
+      threshold,
+      mediaTypes,
+      filter: filter || null,
+    });
   } else {
-    const results = await Promise.all(paths.map(path => mockFindSimilar(path, threshold)));
+    const results = await Promise.all(
+      paths.map(path => mockFindSimilarMedia(path, threshold, mediaTypes))
+    );
     return results.flat();
+  }
+}
+
+/**
+ * Generate a thumbnail for an image, returned as a `data:` URL usable directly
+ * as an `<img src>`. `maxSize` bounds both dimensions (aspect ratio preserved).
+ */
+export async function getImageThumbnail(path: string, maxSize: number = 160): Promise<string> {
+  if (isTauri) {
+    return await invoke<string>("read_image_thumbnail", { path, maxSize });
+  } else {
+    return await mockImageThumbnail(path, maxSize);
   }
 }
 

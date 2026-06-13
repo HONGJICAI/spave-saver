@@ -25,3 +25,4 @@ trash = { workspace = true }
 [dev-dependencies]
 tempfile = "3.8"
 tokio-test = "0.4"
+image = { workspace = true }
