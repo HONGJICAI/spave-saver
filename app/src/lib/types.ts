@@ -35,10 +35,33 @@ export interface DuplicateGroup {
 }
 
 /**
- * Similar image group
+ * Kind of media a similar-group is made of. A group is homogeneous (all files
+ * the same kind), so the UI can pick the right preview and "keep best"
+ * heuristic. Mirrors the Rust `MediaKind` enum (serialized as "Image"/"Video").
+ */
+export type MediaKind = "Image" | "Video";
+
+/**
+ * One file inside a similar-group. Carries the pixel dimensions the UI needs
+ * to show resolution and to offer "keep the highest-resolution copy". For
+ * videos (once implemented) width/height come from the container; until then
+ * they may be null.
+ */
+export interface SimilarFile {
+  path: string;
+  size: number;
+  modified: number;
+  width?: number | null;
+  height?: number | null;
+}
+
+/**
+ * Similar media group (images today; videos once ffmpeg-backed similarity
+ * lands). All files in a group share `media_kind`.
  */
 export interface SimilarGroup {
-  files: FileInfo[];
+  media_kind: MediaKind;
+  files: SimilarFile[];
   similarity_score: number;
 }
 

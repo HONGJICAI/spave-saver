@@ -17,6 +17,7 @@ blake3 = { workspace = true }
 sha2 = { workspace = true }
 image = { workspace = true }
 imagesize = "0.13"
+base64 = "0.22"
 webp = { workspace = true }
 rayon = { workspace = true }
 crossbeam = { workspace = true }

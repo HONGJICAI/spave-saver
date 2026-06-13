@@ -208,7 +208,9 @@ async fn similar_command(path: PathBuf, threshold: f32) -> Result<()> {
     pb.set_message("Analyzing images...");
 
     let api = ServiceApi::new();
-    let similar = api.find_similar_images(path, threshold, None).await?;
+    let similar = api
+        .find_similar_media(path, threshold, vec![], None)
+        .await?;
 
     pb.finish_with_message("Analysis completed");
 
@@ -227,7 +229,7 @@ async fn similar_command(path: PathBuf, threshold: f32) -> Result<()> {
             group.similarity_score * 100.0
         );
         for file in &group.files {
-            println!("    - {}", file.path.display());
+            println!("    - {}", file.path);
         }
     }
 

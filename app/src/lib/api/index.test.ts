@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   scanDirectory,
   findDuplicates,
-  findSimilarImages,
+  findSimilarMedia,
+  getImageThumbnail,
   findEmptyItems,
   findBrokenFiles,
   fixFileExtensions,
@@ -56,14 +57,34 @@ describe('API Layer', () => {
       }
     });
 
-    it('findSimilarImages returns mock data in web mode', async () => {
-      const result = await findSimilarImages(['/test/path'], 0.9);
-      
+    it('findSimilarMedia returns image groups with dimensions in web mode', async () => {
+      const result = await findSimilarMedia(['/test/path'], 0.9);
+
       expect(result).toBeInstanceOf(Array);
-      if (result.length > 0) {
-        expect(result[0]).toHaveProperty('similarity_score');
-        expect(result[0]).toHaveProperty('files');
-      }
+      expect(result.length).toBeGreaterThan(0);
+      expect(result[0]).toHaveProperty('similarity_score');
+      expect(result[0]).toHaveProperty('files');
+      expect(result[0].media_kind).toBe('Image');
+      // Files carry pixel dimensions so the UI can show resolution / keep-best
+      expect(result.every(g => g.files.every(f => typeof f.width === 'number' && typeof f.height === 'number'))).toBe(true);
+    });
+
+    it('findSimilarMedia defaults to images and a video-only request finds nothing', async () => {
+      // Video similarity is not implemented; like the backend, the mock returns
+      // no video groups for a video-only request.
+      const videoOnly = await findSimilarMedia(['/test/path'], 0.5, ['Video']);
+      expect(videoOnly).toEqual([]);
+    });
+
+    it('findSimilarMedia surfaces a permission error for "locked" paths', async () => {
+      await expect(findSimilarMedia(['/data/locked'], 0.5)).rejects.toThrow(
+        'Permission denied (os error 13)'
+      );
+    });
+
+    it('getImageThumbnail returns a data URL in web mode', async () => {
+      const url = await getImageThumbnail('/test/path/photos/sunset.jpg', 160);
+      expect(url.startsWith('data:image/')).toBe(true);
     });
 
     it('findEmptyItems returns empty files and folders in web mode', async () => {
@@ -301,15 +322,16 @@ describe('API Layer', () => {
       expect(results[0].error).toBe('File not found');
     });
 
-    it('findSimilarImages honors the threshold like the backend', async () => {
+    it('findSimilarMedia honors the threshold like the backend', async () => {
       const [all, some, none] = await Promise.all([
-        findSimilarImages(['/test/path'], 0),
-        findSimilarImages(['/test/path'], 0.93),
-        findSimilarImages(['/test/path'], 1),
+        findSimilarMedia(['/test/path'], 0),
+        findSimilarMedia(['/test/path'], 0.96),
+        findSimilarMedia(['/test/path'], 1),
       ]);
 
-      expect(all).toHaveLength(2);
-      expect(some.map(g => g.similarity_score)).toEqual([0.95]);
+      // Three image groups at scores 0.98 / 0.95 / 0.91
+      expect(all).toHaveLength(3);
+      expect(some.map(g => g.similarity_score)).toEqual([0.98]);
       expect(none).toEqual([]);
     });
 
@@ -317,7 +339,7 @@ describe('API Layer', () => {
       const [scan, duplicates, similar, empty, broken, stats, compressible] = await Promise.all([
         scanDirectory('/data/empty-dir'),
         findDuplicates(['/data/empty-dir']),
-        findSimilarImages(['/data/empty-dir'], 0.5),
+        findSimilarMedia(['/data/empty-dir'], 0.5),
         findEmptyItems(['/data/empty-dir']),
         findBrokenFiles(['/data/empty-dir']),
         getStorageStats(['/data/empty-dir']),

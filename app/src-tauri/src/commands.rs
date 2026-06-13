@@ -6,7 +6,7 @@ use once_cell::sync::Lazy;
 use space_saver_core::hash_cache::HashCache;
 use space_saver_core::skip_cache::{FileFingerprint, SkipCache};
 use space_saver_service::api::{
-    BrokenFile, DuplicateGroup, EmptyScanResult, FilterConfig, ScanResult, SimilarGroup,
+    BrokenFile, DuplicateGroup, EmptyScanResult, FilterConfig, MediaKind, ScanResult, SimilarGroup,
     StorageStats,
 };
 use space_saver_service::ServiceApi;
@@ -96,19 +96,30 @@ pub async fn duplicate_file_check(
     Ok(result)
 }
 
-/// Find similar images across multiple paths
+/// Find similar media (images today; videos pending ffmpeg) across multiple
+/// paths. `media_types` selects which kinds to scan ("Image"/"Video"); an
+/// empty list defaults to images.
 #[tauri::command]
-pub async fn similar_file_check(
+pub async fn find_similar_media(
     paths: Vec<String>,
     threshold: f32,
+    media_types: Vec<MediaKind>,
     filter: Option<FilterConfig>,
 ) -> Result<Vec<SimilarGroup>, String> {
     let api = ServiceApi::new();
     let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
 
-    api.find_similar_images_in_paths(paths, threshold, filter)
+    api.find_similar_media_in_paths(paths, threshold, media_types, filter)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Generate a PNG thumbnail for an image, returned as a `data:` URL the
+/// frontend can use directly as an `<img src>`. `max_size` bounds both
+/// dimensions (aspect ratio preserved). Errors for missing or non-image files.
+#[tauri::command]
+pub async fn read_image_thumbnail(path: String, max_size: u32) -> Result<String, String> {
+    space_saver_core::thumbnail_data_url(&PathBuf::from(path), max_size).map_err(|e| e.to_string())
 }
 
 /// Find empty files (0 bytes) and empty folders (no files anywhere beneath
@@ -1064,6 +1075,59 @@ mod tests {
         assert!(set_plugin_quality("No Such Plugin".to_string(), 50.0)
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn find_similar_media_command_groups_images_with_dimensions() {
+        let dir = tempfile::tempdir().unwrap();
+        // save_noise_png is deterministic, so same-size calls produce identical
+        // images -> perceptual distance 0 -> similarity 1.0
+        save_noise_png(&dir.path().join("a.png"), 64, 48);
+        save_noise_png(&dir.path().join("b.png"), 64, 48);
+
+        let groups = find_similar_media(paths_of(&dir), 0.9, vec![MediaKind::Image], None)
+            .await
+            .unwrap();
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].media_kind, MediaKind::Image);
+        assert_eq!(groups[0].files.len(), 2);
+        assert!(groups[0]
+            .files
+            .iter()
+            .all(|f| f.width == Some(64) && f.height == Some(48)));
+    }
+
+    #[tokio::test]
+    async fn find_similar_media_command_video_only_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        save_noise_png(&dir.path().join("a.png"), 32, 32);
+        save_noise_png(&dir.path().join("b.png"), 32, 32);
+
+        // Video similarity is not implemented; a video-only request finds nothing
+        let groups = find_similar_media(paths_of(&dir), 0.9, vec![MediaKind::Video], None)
+            .await
+            .unwrap();
+        assert!(groups.is_empty());
+    }
+
+    #[tokio::test]
+    async fn read_image_thumbnail_returns_data_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("img.png");
+        save_noise_png(&path, 128, 96);
+
+        let url = read_image_thumbnail(path.to_string_lossy().to_string(), 64)
+            .await
+            .unwrap();
+        assert!(url.starts_with("data:image/png;base64,"));
+    }
+
+    #[tokio::test]
+    async fn read_image_thumbnail_errors_on_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope.png").to_string_lossy().to_string();
+        assert!(read_image_thumbnail(missing, 64).await.is_err());
     }
 
     #[test]

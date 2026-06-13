@@ -8,6 +8,7 @@ pub mod image_sim;
 pub mod plugins;
 pub mod scanner;
 pub mod skip_cache;
+pub mod thumbnail;
 pub mod video_sim;
 
 pub use broken::{BrokenCategory, BrokenFileChecker, BrokenReason};
@@ -23,4 +24,5 @@ pub use image_sim::ImageSimilarity;
 pub use plugins::{AnimatedWebPConverterPlugin, ImageZipToWebpZipPlugin, WebPConverterPlugin};
 pub use scanner::{FileInfo, FileScanner};
 pub use skip_cache::{FileFingerprint, SkipCache};
+pub use thumbnail::{image_dimensions, thumbnail_data_url};
 pub use video_sim::VideoSimilarity;
