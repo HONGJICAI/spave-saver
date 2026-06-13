@@ -21,6 +21,17 @@ pub struct DeleteResult {
     pub error: Option<String>,
 }
 
+/// Per-file outcome of a fix-extension (rename) operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FixExtensionResult {
+    /// The original path that was asked to be fixed
+    pub path: String,
+    pub success: bool,
+    /// The new path after renaming, when successful
+    pub new_path: Option<String>,
+    pub error: Option<String>,
+}
+
 /// File operations (delete, move, copy, etc.)
 pub struct FileOperations;
 
@@ -92,6 +103,50 @@ impl FileOperations {
             DeleteMode::Permanent if is_dir => fs::remove_dir_all(path).map_err(|e| e.to_string()),
             DeleteMode::Permanent => fs::remove_file(path).map_err(|e| e.to_string()),
         }
+    }
+
+    /// Rename files whose extension does not match their content so the
+    /// extension matches the detected content (e.g. a PDF named `.jpg` becomes
+    /// `.pdf`), reporting a per-file outcome. The content is re-detected here
+    /// rather than trusting the caller, and a rename is refused when the
+    /// content is unrecognized, the extension already matches, or the target
+    /// name is taken — a misnamed but otherwise valid file is never lost.
+    pub fn fix_extensions(&self, paths: &[PathBuf]) -> Vec<FixExtensionResult> {
+        paths
+            .iter()
+            .map(|path| match self.fix_extension(path) {
+                Ok(new_path) => FixExtensionResult {
+                    path: path.to_string_lossy().to_string(),
+                    success: true,
+                    new_path: Some(new_path),
+                    error: None,
+                },
+                Err(e) => FixExtensionResult {
+                    path: path.to_string_lossy().to_string(),
+                    success: false,
+                    new_path: None,
+                    error: Some(e),
+                },
+            })
+            .collect()
+    }
+
+    fn fix_extension(&self, path: &Path) -> std::result::Result<String, String> {
+        let detected = space_saver_core::broken::extension_fix_for(path).ok_or_else(|| {
+            "Cannot fix: the content is unrecognized or already matches the extension".to_string()
+        })?;
+
+        let target = path.with_extension(detected);
+        if target.exists() {
+            let name = target
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            return Err(format!("A file named {name} already exists"));
+        }
+
+        fs::rename(path, &target).map_err(|e| e.to_string())?;
+        Ok(target.to_string_lossy().to_string())
     }
 
     /// Move a file
@@ -275,6 +330,75 @@ mod tests {
             assert!(file.exists(), "failed trash must leave the file in place");
             assert!(results[0].error.is_some());
         }
+    }
+
+    #[test]
+    fn test_fix_extension_renames_to_detected_format() {
+        let dir = tempdir().unwrap();
+        // PDF bytes wearing a .jpg extension
+        let path = dir.path().join("scan.jpg");
+        fs::write(&path, b"%PDF-1.7\nbody").unwrap();
+
+        let ops = FileOperations::new();
+        let results = ops.fix_extensions(std::slice::from_ref(&path));
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].success, "error: {:?}", results[0].error);
+        let new_path = results[0].new_path.as_ref().unwrap();
+        assert!(new_path.ends_with("scan.pdf"));
+        assert!(!path.exists(), "original misnamed file is gone");
+        assert!(dir.path().join("scan.pdf").exists());
+    }
+
+    #[test]
+    fn test_fix_extension_refuses_unrecognized_content() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("mystery.jpg");
+        fs::write(&path, b"\x00\x01not a known format").unwrap();
+
+        let ops = FileOperations::new();
+        let results = ops.fix_extensions(std::slice::from_ref(&path));
+
+        assert!(!results[0].success);
+        assert!(results[0].error.is_some());
+        assert!(path.exists(), "file must be untouched when nothing to fix");
+    }
+
+    #[test]
+    fn test_fix_extension_refuses_when_target_exists() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("scan.jpg");
+        fs::write(&path, b"%PDF-1.7\nbody").unwrap();
+        // A file already occupies the rename target
+        fs::write(dir.path().join("scan.pdf"), b"existing").unwrap();
+
+        let ops = FileOperations::new();
+        let results = ops.fix_extensions(std::slice::from_ref(&path));
+
+        assert!(!results[0].success);
+        assert!(results[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("already exists"));
+        assert!(path.exists(), "original must be left in place on conflict");
+    }
+
+    #[test]
+    fn test_fix_extension_reports_per_file_results() {
+        let dir = tempdir().unwrap();
+        let good = dir.path().join("doc.jpg");
+        fs::write(&good, b"%PDF-1.7\nbody").unwrap();
+        let bad = dir.path().join("junk.png");
+        fs::write(&bad, b"not an image at all").unwrap();
+
+        let ops = FileOperations::new();
+        let results = ops.fix_extensions(&[good, bad]);
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0].success);
+        // garbage .png has no recognizable signature -> nothing to fix
+        assert!(!results[1].success);
     }
 
     #[test]

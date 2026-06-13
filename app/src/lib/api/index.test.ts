@@ -4,6 +4,8 @@ import {
   findDuplicates,
   findSimilarImages,
   findEmptyItems,
+  findBrokenFiles,
+  fixFileExtensions,
   deleteFiles,
   getStorageStats,
   getCompressionPlugins,
@@ -82,6 +84,58 @@ describe('API Layer', () => {
 
       expect(merged.empty_files.length).toBe(single.empty_files.length * 2);
       expect(merged.empty_folders.length).toBe(single.empty_folders.length * 2);
+    });
+
+    it('findBrokenFiles returns mock data in web mode', async () => {
+      const result = await findBrokenFiles(['/test/path']);
+
+      expect(result).toBeInstanceOf(Array);
+      expect(result.length).toBeGreaterThan(0);
+      expect(result[0]).toHaveProperty('path');
+      expect(result[0]).toHaveProperty('size');
+      expect(result[0]).toHaveProperty('category');
+      expect(result[0]).toHaveProperty('reason');
+      expect(result.every(b => b.reason.length > 0)).toBe(true);
+    });
+
+    it('findBrokenFiles mock covers both broken categories', async () => {
+      const result = await findBrokenFiles(['/test/path']);
+      const categories = new Set(result.map(b => b.category));
+
+      expect(categories.has('corrupted')).toBe(true);
+      expect(categories.has('extension_mismatch')).toBe(true);
+    });
+
+    it('findBrokenFiles mismatches carry a suggested extension, corrupted do not', async () => {
+      const result = await findBrokenFiles(['/test/path']);
+
+      const mismatch = result.find(b => b.category === 'extension_mismatch');
+      expect(mismatch?.suggested_extension).toBeTruthy();
+
+      const corrupted = result.find(b => b.category === 'corrupted');
+      expect(corrupted?.suggested_extension == null).toBe(true);
+    });
+
+    it('fixFileExtensions renames misnamed files in web mode', async () => {
+      const results = await fixFileExtensions(['/photos/scan.jpg']);
+
+      expect(results).toHaveLength(1);
+      expect(results[0].success).toBe(true);
+      expect(results[0].new_path).toBe('/photos/scan.pdf');
+    });
+
+    it('fixFileExtensions mock reports a permission failure for locked files', async () => {
+      const results = await fixFileExtensions(['/locked/report.png']);
+
+      expect(results[0].success).toBe(false);
+      expect(results[0].error).toBeTruthy();
+    });
+
+    it('findBrokenFiles merges results across multiple paths', async () => {
+      const single = await findBrokenFiles(['/a']);
+      const merged = await findBrokenFiles(['/a', '/b']);
+
+      expect(merged.length).toBe(single.length * 2);
     });
 
     it('getStorageStats returns mock data in web mode', async () => {
@@ -226,11 +280,12 @@ describe('API Layer', () => {
     });
 
     it('paths containing "empty-dir" return empty results across scan APIs', async () => {
-      const [scan, duplicates, similar, empty, stats, compressible] = await Promise.all([
+      const [scan, duplicates, similar, empty, broken, stats, compressible] = await Promise.all([
         scanDirectory('/data/empty-dir'),
         findDuplicates(['/data/empty-dir']),
         findSimilarImages(['/data/empty-dir'], 0.5),
         findEmptyItems(['/data/empty-dir']),
+        findBrokenFiles(['/data/empty-dir']),
         getStorageStats(['/data/empty-dir']),
         scanCompressibleFiles(['/data/empty-dir'], ['WebP Converter']),
       ]);
@@ -240,6 +295,7 @@ describe('API Layer', () => {
       expect(duplicates).toEqual([]);
       expect(similar).toEqual([]);
       expect(empty).toEqual({ empty_files: [], empty_folders: [] });
+      expect(broken).toEqual([]);
       expect(stats.total_files).toBe(0);
       expect(stats.total_size).toBe(0);
       expect(compressible).toEqual({ compressible: [], rejected: [] });

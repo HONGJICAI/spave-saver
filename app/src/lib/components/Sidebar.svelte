@@ -17,6 +17,7 @@
     { name: 'Duplicates', path: '/duplicates', icon: '📋' },
     { name: 'Similar', path: '/similar', icon: '🖼️' },
     { name: 'Empty', path: '/empty', icon: '📄' },
+    { name: 'Broken', path: '/broken', icon: '🚫' },
     { name: 'Compress', path: '/compress', icon: '🗜️' }
   ];
 
