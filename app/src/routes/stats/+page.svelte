@@ -4,13 +4,26 @@
   import FileList from '$lib/components/FileList.svelte';
   import { formatSize, percentage } from '$lib/utils/format';
   import { appState } from '$lib/stores/app';
-  
+  import { loadFromSession, saveToSession, sessionKeys } from '$lib/utils/storage';
+
+  // Session-cached results so leaving and returning keeps the analysis intact,
+  // matching the cleanup pages. Session (not local) scope: the on-disk picture
+  // can change between runs, so results shouldn't survive a restart.
+  interface StatsCache {
+    stats: StorageStats | null;
+    scanResults: ScanResult[];
+    showFileList: boolean;
+  }
+  const cached = loadFromSession<StatsCache | null>(sessionKeys.STATS_RESULT, null);
+
   let loading = false;
   let error = '';
-  let stats: StorageStats | null = null;
-  let scanResults: ScanResult[] = [];
-  let showFileList = false;
-  
+  let stats: StorageStats | null = cached?.stats ?? null;
+  let scanResults: ScanResult[] = cached?.scanResults ?? [];
+  let showFileList = cached?.showFileList ?? false;
+
+  $: saveToSession<StatsCache>(sessionKeys.STATS_RESULT, { stats, scanResults, showFileList });
+
   // Aggregate scan results for file list
   $: filesResult = scanResults.length > 0 ? {
     file_count: scanResults.reduce((sum, r) => sum + r.file_count, 0),

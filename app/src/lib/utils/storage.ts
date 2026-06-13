@@ -19,6 +19,7 @@ const STORAGE_KEYS = {
 } as const;
 
 const SESSION_KEYS = {
+  STATS_RESULT: 'space-saver:session:stats',
   DUPLICATES_RESULT: 'space-saver:session:duplicates',
   SIMILAR_RESULT: 'space-saver:session:similar',
   BROKEN_RESULT: 'space-saver:session:broken',
