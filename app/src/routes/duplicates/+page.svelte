@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { findDuplicates, deleteFiles, type DuplicateGroup, type DeleteMode, type DeleteResult } from '$lib/api';
+  import { onMount } from 'svelte';
+  import { findDuplicates, deleteFiles, getConfig, type DuplicateGroup, type DeleteMode, type DeleteResult } from '$lib/api';
   import StatCard from '$lib/components/StatCard.svelte';
   import { formatSize } from '$lib/utils/format';
   import { appState } from '$lib/stores/app';
@@ -24,6 +25,15 @@
   let allowFullGroups = $state(false);
   let deleting = $state(false);
   let lastResults = $state<DeleteResult[] | null>(null);
+
+  // Default the delete mode from the saved configuration (Settings page)
+  onMount(async () => {
+    try {
+      deleteMode = (await getConfig()).default_delete_mode;
+    } catch {
+      // Keep the in-component default if config can't be read
+    }
+  });
 
   let totalWasted = $derived(duplicates.reduce((sum, g) => sum + g.wasted_space, 0));
 

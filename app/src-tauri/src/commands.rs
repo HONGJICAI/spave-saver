@@ -203,14 +203,51 @@ pub async fn get_compression_plugins() -> Result<Vec<serde_json::Value>, String>
         .collect())
 }
 
-/// Set the quality (0-100) of a compression plugin
+/// Set the quality (0-100) of a compression plugin. The new value is also
+/// written to the config file so it survives a restart (config is the single
+/// source of truth for quality; the plugin manager is seeded from it at boot).
 #[tauri::command]
 pub async fn set_plugin_quality(plugin_name: String, quality: f32) -> Result<(), String> {
+    {
+        let manager = space_saver_core::compress_plugins::global_plugin_manager();
+        let mut manager = manager.write().map_err(|e| e.to_string())?;
+        manager
+            .set_plugin_quality(&plugin_name, quality)
+            .map_err(|e| e.to_string())?;
+    }
+    persist_plugin_quality(&config_path(), &plugin_name, quality)
+}
+
+/// Record a plugin's quality in the config file. The stored value is clamped to
+/// match what the plugin manager applies, so config and runtime never diverge.
+fn persist_plugin_quality(
+    path: &std::path::Path,
+    plugin_name: &str,
+    quality: f32,
+) -> Result<(), String> {
+    let mut config = load_config_from(path)?;
+    config
+        .plugin_quality
+        .insert(plugin_name.to_string(), quality.clamp(0.0, 100.0));
+    save_config_to(path, &config)
+}
+
+/// Seed the global plugin manager with the per-plugin qualities saved in config.
+/// Called once at startup so persisted quality takes effect. Unknown plugin
+/// names in config are ignored rather than failing the launch.
+pub fn seed_plugin_quality_from_config() {
+    let config = load_config_from(&config_path()).unwrap_or_default();
+    if config.plugin_quality.is_empty() {
+        return;
+    }
     let manager = space_saver_core::compress_plugins::global_plugin_manager();
-    let mut manager = manager.write().map_err(|e| e.to_string())?;
-    manager
-        .set_plugin_quality(&plugin_name, quality)
-        .map_err(|e| e.to_string())
+    let mut guard = match manager.write() {
+        Ok(guard) => guard,
+        Err(_) => return,
+    };
+    for (name, quality) in &config.plugin_quality {
+        let _ = guard.set_plugin_quality(name, *quality);
+    }
 }
 
 /// Scan paths and find compressible files with estimates
@@ -498,6 +535,69 @@ pub async fn clear_skip_cache() -> Result<usize, String> {
     let removed = cache.clear();
     cache.save().map_err(|e| e.to_string())?;
     Ok(removed)
+}
+
+/// Location of the on-disk config file (the single source of truth for settings)
+fn config_path() -> PathBuf {
+    space_saver_utils::Config::default_path()
+}
+
+/// Load config from a path, falling back to defaults when the file is absent.
+/// Split from the command so it can be tested against a temp path.
+fn load_config_from(path: &std::path::Path) -> Result<space_saver_utils::Config, String> {
+    if path.exists() {
+        space_saver_utils::Config::load(path).map_err(|e| e.to_string())
+    } else {
+        Ok(space_saver_utils::Config::default())
+    }
+}
+
+/// Validate then persist config to a path. Split from the command so it can be
+/// tested against a temp path without touching the real user config.
+fn save_config_to(
+    path: &std::path::Path,
+    config: &space_saver_utils::Config,
+) -> Result<(), String> {
+    config.validate().map_err(|e| e.to_string())?;
+    config.save(path).map_err(|e| e.to_string())
+}
+
+/// Write the default configuration to a path, returning it. Split from the
+/// command so it can be tested against a temp path.
+fn reset_config_at(path: &std::path::Path) -> Result<space_saver_utils::Config, String> {
+    let config = space_saver_utils::Config::default();
+    config.save(path).map_err(|e| e.to_string())?;
+    Ok(config)
+}
+
+/// Get the current application configuration (or defaults if none saved yet)
+#[tauri::command]
+pub async fn get_config() -> Result<space_saver_utils::Config, String> {
+    load_config_from(&config_path())
+}
+
+/// Validate and persist the application configuration, returning what was saved
+#[tauri::command]
+pub async fn set_config(
+    config: space_saver_utils::Config,
+) -> Result<space_saver_utils::Config, String> {
+    save_config_to(&config_path(), &config)?;
+    Ok(config)
+}
+
+/// Reset the configuration to defaults, persisting and returning them
+#[tauri::command]
+pub async fn reset_config() -> Result<space_saver_utils::Config, String> {
+    reset_config_at(&config_path())
+}
+
+/// Detect optional external tools (ffmpeg etc.) on PATH. Runs the (blocking)
+/// PATH lookup + version queries off the async runtime.
+#[tauri::command]
+pub async fn detect_tools() -> Result<Vec<space_saver_service::ToolStatus>, String> {
+    tokio::task::spawn_blocking(space_saver_service::detect_tools)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -964,5 +1064,97 @@ mod tests {
         assert!(set_plugin_quality("No Such Plugin".to_string(), 50.0)
             .await
             .is_err());
+    }
+
+    #[test]
+    fn load_config_returns_default_when_file_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("does-not-exist.toml");
+        let config = load_config_from(&path).unwrap();
+        assert_eq!(config.log_level, "info");
+        assert_eq!(config.default_delete_mode, "trash");
+    }
+
+    #[test]
+    fn save_then_load_config_roundtrips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let config = space_saver_utils::Config {
+            image_similarity_threshold: 0.75,
+            default_delete_mode: "permanent".to_string(),
+            default_compress_backup: false,
+            ..Default::default()
+        };
+
+        save_config_to(&path, &config).unwrap();
+
+        let loaded = load_config_from(&path).unwrap();
+        assert_eq!(loaded.image_similarity_threshold, 0.75);
+        assert_eq!(loaded.default_delete_mode, "permanent");
+        assert!(!loaded.default_compress_backup);
+    }
+
+    #[test]
+    fn save_config_rejects_invalid_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let bad_threshold = space_saver_utils::Config {
+            image_similarity_threshold: 2.0,
+            ..Default::default()
+        };
+        assert!(save_config_to(&path, &bad_threshold).is_err());
+        // An invalid config must not have been written to disk
+        assert!(!path.exists());
+
+        let bad_mode = space_saver_utils::Config {
+            default_delete_mode: "obliterate".to_string(),
+            ..Default::default()
+        };
+        assert!(save_config_to(&path, &bad_mode).is_err());
+    }
+
+    #[test]
+    fn reset_config_writes_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        // Persist a non-default config, then reset it back
+        let custom = space_saver_utils::Config {
+            default_delete_mode: "permanent".to_string(),
+            ..Default::default()
+        };
+        save_config_to(&path, &custom).unwrap();
+
+        let defaults = reset_config_at(&path).unwrap();
+        assert_eq!(defaults.default_delete_mode, "trash");
+
+        // The reset must have been written, not just returned
+        let loaded = load_config_from(&path).unwrap();
+        assert_eq!(loaded.default_delete_mode, "trash");
+    }
+
+    #[test]
+    fn persist_plugin_quality_writes_clamped_value_to_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        persist_plugin_quality(&path, "WebP Converter", 70.0).unwrap();
+        let loaded = load_config_from(&path).unwrap();
+        assert_eq!(loaded.plugin_quality.get("WebP Converter"), Some(&70.0));
+
+        // Out-of-range input is clamped to the same range the manager applies
+        persist_plugin_quality(&path, "WebP Converter", 150.0).unwrap();
+        let loaded = load_config_from(&path).unwrap();
+        assert_eq!(loaded.plugin_quality.get("WebP Converter"), Some(&100.0));
+    }
+
+    #[tokio::test]
+    async fn detect_tools_command_lists_known_tools() {
+        let tools = detect_tools().await.unwrap();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"ffmpeg"));
+        assert!(names.contains(&"cwebp"));
     }
 }

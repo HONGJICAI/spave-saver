@@ -7,6 +7,9 @@ pub fn run() {
     // Initialize logger
     space_saver_utils::init_logger();
 
+    // Apply persisted per-plugin quality before any command runs
+    seed_plugin_quality_from_config();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -25,7 +28,11 @@ pub fn run() {
             scan_compressible_files,
             compress_files_in_place,
             get_skip_cache_info,
-            clear_skip_cache
+            clear_skip_cache,
+            get_config,
+            set_config,
+            reset_config,
+            detect_tools
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -8,6 +8,7 @@
     compressFilesInPlace,
     getSkipCacheInfo,
     clearSkipCache,
+    getConfig,
     type CompressionPlugin,
     type CompressibleFile,
     type RejectedFile,
@@ -24,7 +25,6 @@
     order: string[];
     active: string[];
     poolSize: number;
-    quality: Record<string, number>;
     backup?: boolean;
   }
 
@@ -73,6 +73,15 @@
   }
 
   onMount(async () => {
+    // The Settings page's "keep a backup" default seeds this when the user
+    // hasn't made a per-compress choice yet.
+    let backupDefault = true;
+    try {
+      backupDefault = (await getConfig()).default_compress_backup;
+      createBackup = backupDefault;
+    } catch {
+      // Fall back to the in-component default
+    }
     try {
       const plugins = await getCompressionPlugins();
       const saved = loadFromStorage<CompressSettings | null>(storageKeys.COMPRESS_SETTINGS, null);
@@ -84,16 +93,9 @@
         );
         activePlugins = new Set(plugins.filter(p => saved.active.includes(p.name)).map(p => p.name));
         poolSize = saved.poolSize ?? 2;
-        createBackup = saved.backup ?? true;
-        for (const plugin of plugins) {
-          const quality = saved.quality?.[plugin.name];
-          if (quality != null && plugin.quality != null && quality !== plugin.quality) {
-            plugin.quality = quality;
-            setPluginQuality(plugin.name, quality).catch(err =>
-              console.error(`Failed to restore quality for ${plugin.name}:`, err)
-            );
-          }
-        }
+        createBackup = saved.backup ?? backupDefault;
+        // Quality comes back from the backend already (seeded from config),
+        // so it is no longer restored from localStorage here.
       } else {
         activePlugins = new Set(plugins.map(p => p.name));
       }
@@ -106,13 +108,12 @@
   });
 
   function persistSettings() {
+    // Quality is persisted backend-side (config) via setPluginQuality; only
+    // UI preferences (order, active set, pool size, backup) live here.
     saveToStorage<CompressSettings>(storageKeys.COMPRESS_SETTINGS, {
       order: availablePlugins.map(p => p.name),
       active: Array.from(activePlugins),
       poolSize,
-      quality: Object.fromEntries(
-        availablePlugins.filter(p => p.quality != null).map(p => [p.name, p.quality!])
-      ),
       backup: createBackup,
     });
   }
