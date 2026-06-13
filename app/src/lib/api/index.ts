@@ -4,7 +4,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ScanResult, DuplicateGroup, SimilarGroup, StorageStats, FileInfo, EmptyScanResult, BrokenFile, BrokenCategory, FixExtensionResult } from "../types";
+import type { ScanResult, DuplicateGroup, SimilarGroup, StorageStats, FileInfo, EmptyScanResult, BrokenFile, BrokenCategory, FixExtensionResult, AppConfig, ScanConfig, HashAlgorithm, ToolStatus } from "../types";
 import type { FilterConfig } from "../stores/app";
 import { mockScanResult } from "../../mock/scan";
 import { mockFindDuplicates } from "../../mock/duplicates";
@@ -14,11 +14,13 @@ import { mockFindBroken, mockFixExtensions } from "../../mock/broken";
 import { mockStorageStats } from "../../mock/stats";
 import { mockPlugins, isKnownPlugin } from "../../mock/plugins";
 import { mockSkipCache } from "../../mock/skipCache";
+import { getMockConfig, setMockConfig } from "../../mock/config";
+import { mockDetectTools } from "../../mock/tools";
 
 // Check if running in Tauri environment
 const isTauri = "__TAURI_INTERNALS__" in window;
 
-export { type ScanResult, type DuplicateGroup, type SimilarGroup, type StorageStats, type FileInfo, type FilterConfig, type EmptyScanResult, type BrokenFile, type BrokenCategory, type FixExtensionResult };
+export { type ScanResult, type DuplicateGroup, type SimilarGroup, type StorageStats, type FileInfo, type FilterConfig, type EmptyScanResult, type BrokenFile, type BrokenCategory, type FixExtensionResult, type AppConfig, type ScanConfig, type HashAlgorithm, type ToolStatus };
 
 /**
  * Scan multiple directories for files
@@ -530,6 +532,56 @@ export async function clearSkipCache(): Promise<number> {
     return await invoke<number>("clear_skip_cache");
   } else {
     return mockSkipCache.clear();
+  }
+}
+
+/**
+ * Get the current application configuration (defaults if none saved yet).
+ * The single source of truth: Tauri reads config.toml, web reads localStorage.
+ */
+export async function getConfig(): Promise<AppConfig> {
+  if (isTauri) {
+    return await invoke<AppConfig>("get_config");
+  } else {
+    return getMockConfig();
+  }
+}
+
+/**
+ * Validate and persist the application configuration, returning what was saved.
+ * The web branch mirrors the backend's validate() so the settings UI surfaces
+ * the same rejection strings (rejected as a plain string, like a real invoke).
+ */
+export async function setConfig(config: AppConfig): Promise<AppConfig> {
+  if (isTauri) {
+    return await invoke<AppConfig>("set_config", { config });
+  } else {
+    if (config.image_similarity_threshold < 0 || config.image_similarity_threshold > 1) {
+      return Promise.reject(
+        `image_similarity_threshold must be between 0.0 and 1.0, got ${config.image_similarity_threshold}`
+      );
+    }
+    if (config.max_concurrent_tasks < 1) {
+      return Promise.reject("max_concurrent_tasks must be at least 1");
+    }
+    if (config.default_delete_mode !== "trash" && config.default_delete_mode !== "permanent") {
+      return Promise.reject(
+        `default_delete_mode must be 'trash' or 'permanent', got '${config.default_delete_mode}'`
+      );
+    }
+    return setMockConfig(config);
+  }
+}
+
+/**
+ * Detect optional external tools (ffmpeg etc.) on PATH. Used by the settings
+ * page to show the environment and gate features that build on these tools.
+ */
+export async function detectTools(): Promise<ToolStatus[]> {
+  if (isTauri) {
+    return await invoke<ToolStatus[]>("detect_tools");
+  } else {
+    return mockDetectTools();
   }
 }
 

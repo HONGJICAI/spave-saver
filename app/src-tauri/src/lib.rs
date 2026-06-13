@@ -25,7 +25,10 @@ pub fn run() {
             scan_compressible_files,
             compress_files_in_place,
             get_skip_cache_info,
-            clear_skip_cache
+            clear_skip_cache,
+            get_config,
+            set_config,
+            detect_tools
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

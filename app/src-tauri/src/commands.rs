@@ -500,6 +500,55 @@ pub async fn clear_skip_cache() -> Result<usize, String> {
     Ok(removed)
 }
 
+/// Location of the on-disk config file (the single source of truth for settings)
+fn config_path() -> PathBuf {
+    space_saver_utils::Config::default_path()
+}
+
+/// Load config from a path, falling back to defaults when the file is absent.
+/// Split from the command so it can be tested against a temp path.
+fn load_config_from(path: &std::path::Path) -> Result<space_saver_utils::Config, String> {
+    if path.exists() {
+        space_saver_utils::Config::load(path).map_err(|e| e.to_string())
+    } else {
+        Ok(space_saver_utils::Config::default())
+    }
+}
+
+/// Validate then persist config to a path. Split from the command so it can be
+/// tested against a temp path without touching the real user config.
+fn save_config_to(
+    path: &std::path::Path,
+    config: &space_saver_utils::Config,
+) -> Result<(), String> {
+    config.validate().map_err(|e| e.to_string())?;
+    config.save(path).map_err(|e| e.to_string())
+}
+
+/// Get the current application configuration (or defaults if none saved yet)
+#[tauri::command]
+pub async fn get_config() -> Result<space_saver_utils::Config, String> {
+    load_config_from(&config_path())
+}
+
+/// Validate and persist the application configuration, returning what was saved
+#[tauri::command]
+pub async fn set_config(
+    config: space_saver_utils::Config,
+) -> Result<space_saver_utils::Config, String> {
+    save_config_to(&config_path(), &config)?;
+    Ok(config)
+}
+
+/// Detect optional external tools (ffmpeg etc.) on PATH. Runs the (blocking)
+/// PATH lookup + version queries off the async runtime.
+#[tauri::command]
+pub async fn detect_tools() -> Result<Vec<space_saver_service::ToolStatus>, String> {
+    tokio::task::spawn_blocking(space_saver_service::detect_tools)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -964,5 +1013,62 @@ mod tests {
         assert!(set_plugin_quality("No Such Plugin".to_string(), 50.0)
             .await
             .is_err());
+    }
+
+    #[test]
+    fn load_config_returns_default_when_file_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("does-not-exist.toml");
+        let config = load_config_from(&path).unwrap();
+        assert_eq!(config.log_level, "info");
+        assert_eq!(config.default_delete_mode, "trash");
+    }
+
+    #[test]
+    fn save_then_load_config_roundtrips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let config = space_saver_utils::Config {
+            image_similarity_threshold: 0.75,
+            default_delete_mode: "permanent".to_string(),
+            default_compress_backup: false,
+            ..Default::default()
+        };
+
+        save_config_to(&path, &config).unwrap();
+
+        let loaded = load_config_from(&path).unwrap();
+        assert_eq!(loaded.image_similarity_threshold, 0.75);
+        assert_eq!(loaded.default_delete_mode, "permanent");
+        assert!(!loaded.default_compress_backup);
+    }
+
+    #[test]
+    fn save_config_rejects_invalid_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let bad_threshold = space_saver_utils::Config {
+            image_similarity_threshold: 2.0,
+            ..Default::default()
+        };
+        assert!(save_config_to(&path, &bad_threshold).is_err());
+        // An invalid config must not have been written to disk
+        assert!(!path.exists());
+
+        let bad_mode = space_saver_utils::Config {
+            default_delete_mode: "obliterate".to_string(),
+            ..Default::default()
+        };
+        assert!(save_config_to(&path, &bad_mode).is_err());
+    }
+
+    #[tokio::test]
+    async fn detect_tools_command_lists_known_tools() {
+        let tools = detect_tools().await.unwrap();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"ffmpeg"));
+        assert!(names.contains(&"cwebp"));
     }
 }

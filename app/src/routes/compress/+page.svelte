@@ -8,6 +8,7 @@
     compressFilesInPlace,
     getSkipCacheInfo,
     clearSkipCache,
+    getConfig,
     type CompressionPlugin,
     type CompressibleFile,
     type RejectedFile,
@@ -73,6 +74,15 @@
   }
 
   onMount(async () => {
+    // The Settings page's "keep a backup" default seeds this when the user
+    // hasn't made a per-compress choice yet.
+    let backupDefault = true;
+    try {
+      backupDefault = (await getConfig()).default_compress_backup;
+      createBackup = backupDefault;
+    } catch {
+      // Fall back to the in-component default
+    }
     try {
       const plugins = await getCompressionPlugins();
       const saved = loadFromStorage<CompressSettings | null>(storageKeys.COMPRESS_SETTINGS, null);
@@ -84,7 +94,7 @@
         );
         activePlugins = new Set(plugins.filter(p => saved.active.includes(p.name)).map(p => p.name));
         poolSize = saved.poolSize ?? 2;
-        createBackup = saved.backup ?? true;
+        createBackup = saved.backup ?? backupDefault;
         for (const plugin of plugins) {
           const quality = saved.quality?.[plugin.name];
           if (quality != null && plugin.quality != null && quality !== plugin.quality) {

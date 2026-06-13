@@ -1,15 +1,29 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { appState } from '$lib/stores/app';
-  import { findSimilarImages, deleteFiles } from '$lib/api';
-  import type { SimilarGroup } from '$lib/api';
+  import { findSimilarImages, deleteFiles, getConfig } from '$lib/api';
+  import type { SimilarGroup, DeleteMode } from '$lib/api';
   import { formatSize } from '$lib/utils/format';
 
   let loading = $state(false);
   let groups: SimilarGroup[] = $state([]);
   let threshold = $state(0.9);
+  let defaultDeleteMode = $state<DeleteMode>('trash');
   let selectedFiles = $state<Set<string>>(new Set());
   let showDeleteConfirm = $state(false);
   let deleteInProgress = $state(false);
+
+  // Seed the threshold and delete mode from the saved configuration so the
+  // Settings page actually drives this page's defaults.
+  onMount(async () => {
+    try {
+      const cfg = await getConfig();
+      threshold = cfg.image_similarity_threshold;
+      defaultDeleteMode = cfg.default_delete_mode;
+    } catch {
+      // Fall back to the in-component defaults if config can't be read
+    }
+  });
 
   async function handleScan() {
     // Use scanPaths
@@ -59,7 +73,7 @@
     deleteInProgress = true;
     try {
       // Only files actually deleted leave the UI; failures stay selected
-      const results = await deleteFiles(Array.from(selectedFiles));
+      const results = await deleteFiles(Array.from(selectedFiles), defaultDeleteMode);
       const deleted = new Set(results.filter(r => r.success).map(r => r.path));
       const failed = results.filter(r => !r.success);
 
@@ -106,16 +120,16 @@
         <label class="block text-sm font-medium text-gray-700 mb-2">
           Similarity Threshold: {(threshold * 100).toFixed(0)}%
         </label>
-        <input 
-          type="range" 
-          min="0.7" 
-          max="1.0" 
-          step="0.05" 
+        <input
+          type="range"
+          min="0.5"
+          max="1.0"
+          step="0.05"
           bind:value={threshold}
           class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
         />
         <div class="flex justify-between text-xs text-gray-500 mt-1">
-          <span>More matches (70%)</span>
+          <span>More matches (50%)</span>
           <span>Exact only (100%)</span>
         </div>
       </div>

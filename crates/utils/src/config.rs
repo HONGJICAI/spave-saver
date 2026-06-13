@@ -24,8 +24,26 @@ pub struct Config {
     /// Image similarity threshold
     pub image_similarity_threshold: f32,
 
+    /// Default delete mode for delete actions ("trash" or "permanent").
+    /// Consumed by the frontend as the default for delete dialogs.
+    #[serde(default = "default_delete_mode")]
+    pub default_delete_mode: String,
+
+    /// Whether in-place compression keeps a `.bak` of the original by default.
+    /// Consumed by the frontend as the default for the compress confirm step.
+    #[serde(default = "default_compress_backup")]
+    pub default_compress_backup: bool,
+
     /// Scan settings
     pub scan: ScanConfig,
+}
+
+fn default_delete_mode() -> String {
+    "trash".to_string()
+}
+
+fn default_compress_backup() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +84,8 @@ impl Default for Config {
             max_concurrent_tasks: 4,
             hash_algorithm: HashAlgorithm::Blake3,
             image_similarity_threshold: 0.9,
+            default_delete_mode: default_delete_mode(),
+            default_compress_backup: default_compress_backup(),
             scan: ScanConfig::default(),
         }
     }
@@ -128,6 +148,35 @@ impl Config {
         }
     }
 
+    /// Validate the configuration, rejecting values the app cannot honour.
+    /// Called before persisting an edited config so bad input fails loudly
+    /// instead of silently corrupting behaviour.
+    pub fn validate(&self) -> Result<()> {
+        if !(0.0..=1.0).contains(&self.image_similarity_threshold) {
+            anyhow::bail!(
+                "image_similarity_threshold must be between 0.0 and 1.0, got {}",
+                self.image_similarity_threshold
+            );
+        }
+        if self.max_concurrent_tasks == 0 {
+            anyhow::bail!("max_concurrent_tasks must be at least 1");
+        }
+        const LEVELS: [&str; 5] = ["error", "warn", "info", "debug", "trace"];
+        if !LEVELS.contains(&self.log_level.as_str()) {
+            anyhow::bail!(
+                "log_level must be one of error, warn, info, debug, trace, got '{}'",
+                self.log_level
+            );
+        }
+        if self.default_delete_mode != "trash" && self.default_delete_mode != "permanent" {
+            anyhow::bail!(
+                "default_delete_mode must be 'trash' or 'permanent', got '{}'",
+                self.default_delete_mode
+            );
+        }
+        Ok(())
+    }
+
     /// Ensure directories exist
     pub fn ensure_directories(&self) -> Result<()> {
         if let Some(parent) = self.database_path.parent() {
@@ -167,5 +216,98 @@ mod tests {
         let scan = ScanConfig::default();
         assert!(!scan.follow_links);
         assert!(!scan.exclude_patterns.is_empty());
+    }
+
+    #[test]
+    fn test_new_defaults() {
+        let config = Config::default();
+        assert_eq!(config.default_delete_mode, "trash");
+        assert!(config.default_compress_backup);
+    }
+
+    #[test]
+    fn test_validate_accepts_default() {
+        assert!(Config::default().validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_rejects_out_of_range_threshold() {
+        let high = Config {
+            image_similarity_threshold: 1.5,
+            ..Default::default()
+        };
+        assert!(high.validate().is_err());
+        let low = Config {
+            image_similarity_threshold: -0.1,
+            ..Default::default()
+        };
+        assert!(low.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_threshold_boundaries() {
+        let zero = Config {
+            image_similarity_threshold: 0.0,
+            ..Default::default()
+        };
+        assert!(zero.validate().is_ok());
+        let one = Config {
+            image_similarity_threshold: 1.0,
+            ..Default::default()
+        };
+        assert!(one.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_rejects_zero_concurrency() {
+        let config = Config {
+            max_concurrent_tasks: 0,
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_rejects_unknown_log_level() {
+        let config = Config {
+            log_level: "verbose".to_string(),
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_rejects_unknown_delete_mode() {
+        let config = Config {
+            default_delete_mode: "shred".to_string(),
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_load_old_config_without_new_fields() {
+        // A config file written before the new fields existed must still load,
+        // falling back to the serde defaults rather than failing to parse.
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let legacy = r#"
+database_path = "/tmp/db.sqlite"
+cache_dir = "/tmp/cache"
+log_level = "info"
+max_concurrent_tasks = 4
+hash_algorithm = "Blake3"
+image_similarity_threshold = 0.9
+
+[scan]
+follow_links = false
+min_file_size = 0
+exclude_patterns = ["*.tmp"]
+"#;
+        fs::write(&config_path, legacy).unwrap();
+
+        let loaded = Config::load(&config_path).unwrap();
+        assert_eq!(loaded.default_delete_mode, "trash");
+        assert!(loaded.default_compress_backup);
     }
 }
