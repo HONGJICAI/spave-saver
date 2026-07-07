@@ -3,7 +3,15 @@
   import { formatSize } from "$lib/utils/format";
 
   type Props = {
+    // Capped list (see MAX_KEPT_COMPRESSION_RESULTS in +page.svelte) used only
+    // to render the tables below; use the *Count/totalActualSavings props for
+    // stats since those stay accurate even once the list itself is capped.
     results: InPlaceCompressionResult[];
+    compressedCount: number;
+    skippedCount: number;
+    failedCount: number;
+    totalActualSavings: number;
+    totalResultsCount: number;
     compressing: boolean;
     processedCount: number;
     totalToProcess: number;
@@ -14,6 +22,11 @@
 
   let {
     results,
+    compressedCount,
+    skippedCount,
+    failedCount,
+    totalActualSavings,
+    totalResultsCount,
     compressing,
     processedCount,
     totalToProcess,
@@ -25,10 +38,6 @@
   let compressedResults = $derived(results.filter(r => r.status === 'compressed'));
   let skippedResults = $derived(results.filter(r => r.status === 'skipped'));
   let failedResults = $derived(results.filter(r => r.status === 'failed'));
-
-  let totalActualSavings = $derived(
-    compressedResults.reduce((sum, r) => sum + (r.savings || 0), 0)
-  );
 
   let showAllCompressed = $state(false);
   let showAllFailed = $state(false);
@@ -83,9 +92,9 @@
         ></div>
       </div>
       <div class="mt-2 text-xs text-gray-600 flex gap-4">
-        <p>• {compressedResults.length} compressed</p>
-        <p>• {skippedResults.length} skipped</p>
-        <p>• {failedResults.length} failed</p>
+        <p>• {compressedCount} compressed</p>
+        <p>• {skippedCount} skipped</p>
+        <p>• {failedCount} failed</p>
       </div>
 
       <!-- Currently Processing Files (always visible with fixed height) -->
@@ -126,25 +135,25 @@
   {/if}
 
   <!-- Summary Statistics (shown after completion) -->
-  {#if !compressing && results.length > 0}
+  {#if !compressing && totalResultsCount > 0}
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
       <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 min-w-0">
         <p class="text-xs text-gray-600 mb-1">Total Processed</p>
-        <p class="text-2xl font-bold text-blue-600">{results.length}</p>
+        <p class="text-2xl font-bold text-blue-600">{totalResultsCount}</p>
       </div>
       <div class="bg-green-50 border border-green-200 rounded-lg p-4 min-w-0">
         <p class="text-xs text-gray-600 mb-1">Compressed</p>
-        <p class="text-2xl font-bold text-green-600">{compressedResults.length}</p>
+        <p class="text-2xl font-bold text-green-600">{compressedCount}</p>
         <p class="text-xs text-green-700 mt-1">Saved: {formatSize(totalActualSavings)}</p>
       </div>
       <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 min-w-0">
         <p class="text-xs text-gray-600 mb-1">Skipped</p>
-        <p class="text-2xl font-bold text-amber-600">{skippedResults.length}</p>
+        <p class="text-2xl font-bold text-amber-600">{skippedCount}</p>
         <p class="text-xs text-amber-700 mt-1">Already optimal, kept as-is</p>
       </div>
       <div class="bg-red-50 border border-red-200 rounded-lg p-4 min-w-0">
         <p class="text-xs text-gray-600 mb-1">Failed</p>
-        <p class="text-2xl font-bold text-red-600">{failedResults.length}</p>
+        <p class="text-2xl font-bold text-red-600">{failedCount}</p>
       </div>
     </div>
   {/if}
@@ -157,7 +166,7 @@
           <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
             <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
           </svg>
-          Compressed ({compressedResults.length})
+          Compressed ({compressedCount})
         </h3>
       </div>
       <div class="max-h-[35vh] overflow-y-auto">
@@ -210,6 +219,11 @@
               </button>
             </div>
           {/if}
+          {#if compressedResults.length < compressedCount}
+            <p class="px-3 py-1.5 text-xs text-gray-500 bg-gray-50 border-t border-gray-200">
+              Showing the first {compressedResults.length} of {compressedCount} to limit memory use
+            </p>
+          {/if}
         {/if}
       </div>
     </div>
@@ -221,7 +235,7 @@
           <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
             <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path>
           </svg>
-          Failed ({failedResults.length})
+          Failed ({failedCount})
         </h3>
       </div>
       <div class="max-h-[35vh] overflow-y-auto">
@@ -265,13 +279,18 @@
               </button>
             </div>
           {/if}
+          {#if failedResults.length < failedCount}
+            <p class="px-3 py-1.5 text-xs text-gray-500 bg-gray-50 border-t border-gray-200">
+              Showing the first {failedResults.length} of {failedCount} to limit memory use
+            </p>
+          {/if}
         {/if}
       </div>
     </div>
   </div>
 
   <!-- Skipped Files (output was not smaller; originals kept untouched) -->
-  {#if skippedResults.length > 0}
+  {#if skippedCount > 0}
     <div class="mt-6">
       <button
         onclick={() => showSkipped = !showSkipped}
@@ -281,7 +300,7 @@
           <svg class="w-5 h-5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
           </svg>
-          <span class="font-semibold text-gray-900">Skipped ({skippedResults.length}) — already optimal, originals kept</span>
+          <span class="font-semibold text-gray-900">Skipped ({skippedCount}) — already optimal, originals kept</span>
         </div>
         <svg
           class="w-5 h-5 text-gray-500 transition-transform {showSkipped ? 'rotate-180' : ''}"
@@ -305,6 +324,11 @@
             </div>
           {/each}
         </div>
+        {#if skippedResults.length < skippedCount}
+          <p class="px-3 py-1.5 text-xs text-gray-500">
+            Showing the first {skippedResults.length} of {skippedCount} to limit memory use
+          </p>
+        {/if}
       {/if}
     </div>
   {/if}

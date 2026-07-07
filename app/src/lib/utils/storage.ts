@@ -25,6 +25,11 @@ const SESSION_KEYS = {
   BROKEN_RESULT: 'space-saver:session:broken',
   EMPTY_RESULT: 'space-saver:session:empty',
   COMPRESS_RESULT: 'space-saver:session:compress',
+  // Kept separate from COMPRESS_RESULT: this changes on every file processed
+  // during compression, while COMPRESS_RESULT (scan results) does not. Sharing
+  // one key would mean re-serializing the entire scan result set (potentially
+  // hundreds of thousands of entries) on every single file completion.
+  COMPRESS_PROGRESS: 'space-saver:session:compress-progress',
 } as const;
 
 function load<T>(storage: Storage, label: string, key: string, defaultValue: T): T {
