@@ -42,8 +42,8 @@
   //
   // Split into two session keys/effects on purpose: scan state (compressibleFiles/
   // rejectedFiles/selectedFiles) is written once per scan, while progress state
-  // (compressionResults/counts) changes once per processed file. Bundling them
-  // into one object would re-serialize the (potentially hundreds-of-thousands-
+  // (compressed/skipped/failed results, counts) changes once per processed file.
+  // Bundling them into one object would re-serialize the (potentially hundreds-of-thousands-
   // entry) scan results on every single file completion during compression —
   // that repeated full-array JSON.stringify was the main cause of the compress
   // page running out of memory on very large batches.
@@ -55,19 +55,24 @@
     currentStep: Step;
   }
   interface CompressProgressCache {
-    compressionResults: InPlaceCompressionResult[];
+    compressedResults: InPlaceCompressionResult[];
+    skippedResults: InPlaceCompressionResult[];
+    // Unlike compressed/skipped, failures are kept in full (not capped): they
+    // are usually rare and are the ones a user actually needs to inspect
+    // individually. See recordResults() for how this stays cheap even at scale.
+    failedResults: InPlaceCompressionResult[];
     compressedCount: number;
     skippedCount: number;
-    failedCount: number;
     totalActualSavings: number;
   }
   const cachedScan = loadFromSession<CompressScanCache | null>(sessionKeys.COMPRESS_RESULT, null);
   const cachedProgress = loadFromSession<CompressProgressCache | null>(sessionKeys.COMPRESS_PROGRESS, null);
 
-  // Caps how many individual results we keep around for the results tables and
-  // the session-restore cache. Progress counts/savings below are running totals
-  // that are NOT capped, so stats stay accurate even for hundreds of thousands
-  // of files while memory use for the kept list stays bounded.
+  // Caps how many compressed/skipped results we keep around for the results
+  // tables and the session-restore cache. compressedCount/skippedCount below
+  // are running totals that are NOT capped, so stats stay accurate even for
+  // hundreds of thousands of files while memory use for the kept list stays
+  // bounded. Failed results are handled separately and are not capped.
   const MAX_KEPT_COMPRESSION_RESULTS = 500;
 
   let availablePlugins = $state<CompressionPlugin[]>([]);
@@ -77,10 +82,12 @@
   let rejectedFiles = $state<RejectedFile[]>(cachedScan?.rejectedFiles ?? []);
   let selectedFiles = $state<Set<string>>(new Set(cachedScan?.selectedFiles ?? []));
   let compressing = $state(false);
-  let compressionResults = $state<InPlaceCompressionResult[]>(cachedProgress?.compressionResults ?? []);
+  let compressedResults = $state<InPlaceCompressionResult[]>(cachedProgress?.compressedResults ?? []);
+  let skippedResults = $state<InPlaceCompressionResult[]>(cachedProgress?.skippedResults ?? []);
+  let failedResults = $state<InPlaceCompressionResult[]>(cachedProgress?.failedResults ?? []);
   let compressedCount = $state(cachedProgress?.compressedCount ?? 0);
   let skippedCount = $state(cachedProgress?.skippedCount ?? 0);
-  let failedCount = $state(cachedProgress?.failedCount ?? 0);
+  let failedCount = $derived(failedResults.length);
   let totalActualSavings = $state(cachedProgress?.totalActualSavings ?? 0);
 
   // Worker pool configuration
@@ -130,10 +137,11 @@
 
   $effect(() => {
     scheduleProgressSave({
-      compressionResults,
+      compressedResults,
+      skippedResults,
+      failedResults,
       compressedCount,
       skippedCount,
-      failedCount,
       totalActualSavings,
     });
   });
@@ -313,25 +321,32 @@
   }
 
   // Updates the running totals (unbounded, always accurate) and appends to the
-  // capped display list (bounded, for the results tables / session restore).
+  // capped display lists (bounded, for the results tables / session restore).
   // Splitting these avoids the O(n^2) "copy the whole array on every file"
   // pattern that made compressing hundreds of thousands of files OOM the UI.
+  //
+  // Failed results are the exception: they are kept in full since they're the
+  // ones worth inspecting individually and are usually rare. `.push()` mutates
+  // the $state array in place (Svelte 5 deeply proxies arrays), so appending
+  // stays O(1) amortized instead of copying the whole array like `[...arr, x]`
+  // would — that's what keeps this safe even if a run fails on most files.
   function recordResults(newResults: InPlaceCompressionResult[]) {
     for (const result of newResults) {
       if (result.status === 'compressed') {
         compressedCount++;
         totalActualSavings += result.savings || 0;
+        if (compressedResults.length < MAX_KEPT_COMPRESSION_RESULTS) {
+          compressedResults.push(result);
+        }
       } else if (result.status === 'skipped') {
         skippedCount++;
+        if (skippedResults.length < MAX_KEPT_COMPRESSION_RESULTS) {
+          skippedResults.push(result);
+        }
       } else if (result.status === 'failed') {
-        failedCount++;
+        failedResults.push(result);
       }
     }
-    if (compressionResults.length >= MAX_KEPT_COMPRESSION_RESULTS) {
-      return;
-    }
-    const room = MAX_KEPT_COMPRESSION_RESULTS - compressionResults.length;
-    compressionResults = [...compressionResults, ...newResults.slice(0, room)];
   }
 
   async function handleCompress() {
@@ -344,10 +359,11 @@
     compressing = true;
     appState.setBusy(true);
     $appState.error = null;
-    compressionResults = [];
+    compressedResults = [];
+    skippedResults = [];
+    failedResults = [];
     compressedCount = 0;
     skippedCount = 0;
-    failedCount = 0;
     totalActualSavings = 0;
     processedCount = 0;
     currentlyProcessing = [];
@@ -413,10 +429,11 @@
 
   function startNewScan() {
     currentStep = 'scan';
-    compressionResults = [];
+    compressedResults = [];
+    skippedResults = [];
+    failedResults = [];
     compressedCount = 0;
     skippedCount = 0;
-    failedCount = 0;
     totalActualSavings = 0;
     compressibleFiles = [];
     rejectedFiles = [];
@@ -522,7 +539,9 @@
   {#if currentStep === 'process'}
     <div class="flex-1 min-h-0 overflow-y-auto">
       <ProcessStep
-        results={compressionResults}
+        {compressedResults}
+        {skippedResults}
+        {failedResults}
         {compressedCount}
         {skippedCount}
         {failedCount}

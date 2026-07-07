@@ -2,11 +2,18 @@
   import type { InPlaceCompressionResult } from "$lib/api";
   import { formatSize } from "$lib/utils/format";
 
+  // compressedResults/skippedResults are capped (see MAX_KEPT_COMPRESSION_RESULTS
+  // in +page.svelte) — use compressedCount/skippedCount for stats, since those
+  // stay accurate even once the lists themselves are capped. failedResults is
+  // NOT capped (failedCount === failedResults.length always) since failures are
+  // usually rare and worth inspecting individually; MAX_RENDERED_FAILED_ROWS
+  // below only limits how many of them get turned into DOM rows at once, so a
+  // pathological all-failing run can't still take down the page by rendering
+  // hundreds of thousands of table rows.
   type Props = {
-    // Capped list (see MAX_KEPT_COMPRESSION_RESULTS in +page.svelte) used only
-    // to render the tables below; use the *Count/totalActualSavings props for
-    // stats since those stay accurate even once the list itself is capped.
-    results: InPlaceCompressionResult[];
+    compressedResults: InPlaceCompressionResult[];
+    skippedResults: InPlaceCompressionResult[];
+    failedResults: InPlaceCompressionResult[];
     compressedCount: number;
     skippedCount: number;
     failedCount: number;
@@ -21,7 +28,9 @@
   };
 
   let {
-    results,
+    compressedResults,
+    skippedResults,
+    failedResults,
     compressedCount,
     skippedCount,
     failedCount,
@@ -35,9 +44,7 @@
     onStartNew
   }: Props = $props();
 
-  let compressedResults = $derived(results.filter(r => r.status === 'compressed'));
-  let skippedResults = $derived(results.filter(r => r.status === 'skipped'));
-  let failedResults = $derived(results.filter(r => r.status === 'failed'));
+  const MAX_RENDERED_FAILED_ROWS = 2000;
 
   let showAllCompressed = $state(false);
   let showAllFailed = $state(false);
@@ -47,7 +54,7 @@
     showAllCompressed ? compressedResults : compressedResults.slice(0, 10)
   );
   let displayedFailedResults = $derived(
-    showAllFailed ? failedResults : failedResults.slice(0, 10)
+    showAllFailed ? failedResults.slice(0, MAX_RENDERED_FAILED_ROWS) : failedResults.slice(0, 10)
   );
 
   function fileName(path: string): string {
@@ -279,9 +286,9 @@
               </button>
             </div>
           {/if}
-          {#if failedResults.length < failedCount}
+          {#if showAllFailed && failedResults.length > MAX_RENDERED_FAILED_ROWS}
             <p class="px-3 py-1.5 text-xs text-gray-500 bg-gray-50 border-t border-gray-200">
-              Showing the first {failedResults.length} of {failedCount} to limit memory use
+              Showing the first {MAX_RENDERED_FAILED_ROWS} of {failedResults.length} to keep the page responsive
             </p>
           {/if}
         {/if}
