@@ -279,6 +279,25 @@ describe('API Layer', () => {
       const failed = results[2];
       expect(failed.success).toBe(false);
       expect(failed.error).toBeTruthy();
+      expect(failed.error_code).toBe('backup_failed');
+    });
+
+    it('compressFilesInPlace classifies corrupt files as corrupt_file', async () => {
+      const results = await compressFilesInPlace(['/photos/corrupt.png'], ['WebP Converter']);
+
+      expect(results[0].status).toBe('failed');
+      expect(results[0].success).toBe(false);
+      expect(results[0].error_code).toBe('corrupt_file');
+      expect(results[0].error).toContain('Failed to open image');
+    });
+
+    it('compressFilesInPlace classifies files with no active plugin as unsupported_format', async () => {
+      const results = await compressFilesInPlace(['/photos/unsupported.png'], ['WebP Converter']);
+
+      expect(results[0].status).toBe('failed');
+      expect(results[0].success).toBe(false);
+      expect(results[0].error_code).toBe('unsupported_format');
+      expect(results[0].error).toContain('No active plugin');
     });
 
     it('compressFilesInPlace omits backup_path when backups are disabled', async () => {
@@ -302,6 +321,29 @@ describe('API Layer', () => {
       expect(paths.some(p => p.includes('locked'))).toBe(true);
     });
 
+    it('a full scan-then-compress-all demo run surfaces multiple failure categories with more than one file each', async () => {
+      const scan = await scanCompressibleFiles(['/test/path'], ['WebP Converter']);
+      const paths = scan.compressible.map(f => f.path);
+
+      const results = await compressFilesInPlace(paths, ['WebP Converter']);
+      const failed = results.filter(r => r.status === 'failed');
+
+      const counts = new Map<string, number>();
+      for (const r of failed) {
+        const code = r.error_code ?? 'unknown';
+        counts.set(code, (counts.get(code) ?? 0) + 1);
+      }
+
+      // The Failed table's per-category breakdown/filter chips are only a
+      // meaningful demo if the default scan produces more than one failure
+      // category, and more than one file within at least one of them.
+      expect(counts.size).toBeGreaterThan(1);
+      expect([...counts.values()].some(count => count > 1)).toBe(true);
+      expect(counts.get('backup_failed')).toBeGreaterThanOrEqual(2);
+      expect(counts.get('corrupt_file')).toBeGreaterThanOrEqual(2);
+      expect(counts.get('unsupported_format')).toBeGreaterThanOrEqual(2);
+    });
+
     it('setPluginQuality rejects unknown plugins with the backend error string', async () => {
       await expect(setPluginQuality('No Such Plugin', 50)).rejects.toBe(
         'Plugin not found: No Such Plugin'
@@ -320,6 +362,7 @@ describe('API Layer', () => {
       expect(results[0].status).toBe('failed');
       expect(results[0].success).toBe(false);
       expect(results[0].error).toBe('File not found');
+      expect(results[0].error_code).toBe('not_found');
     });
 
     it('findSimilarMedia honors the threshold like the backend', async () => {

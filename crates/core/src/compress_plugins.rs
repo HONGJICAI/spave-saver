@@ -32,6 +32,98 @@ pub enum CompressionOutcome {
     Skipped { plugin_name: String, reason: String },
 }
 
+/// Coarse classification of a compression failure. Lets callers group and
+/// display failures by category instead of parsing free-text error messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompressionErrorKind {
+    /// The source file did not exist when compression started
+    NotFound,
+    /// No plugin (active or otherwise) can process this file
+    UnsupportedFormat,
+    /// The file's content could not be parsed/decoded (corrupt image, corrupt zip, ...)
+    CorruptFile,
+    /// The compression/encode step itself failed
+    EncodeFailed,
+    /// The output path collided with an existing file (e.g. a concurrent conversion)
+    OutputConflict,
+    /// Backing up or replacing the original file failed
+    BackupFailed,
+    /// The OS denied the operation (permissions)
+    PermissionDenied,
+    /// Any other I/O failure (disk full, device error, ...)
+    Io,
+    /// Could not be classified into any of the above
+    Unknown,
+}
+
+impl CompressionErrorKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::NotFound => "not_found",
+            Self::UnsupportedFormat => "unsupported_format",
+            Self::CorruptFile => "corrupt_file",
+            Self::EncodeFailed => "encode_failed",
+            Self::OutputConflict => "output_conflict",
+            Self::BackupFailed => "backup_failed",
+            Self::PermissionDenied => "permission_denied",
+            Self::Io => "io",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// A compression failure tagged with a coarse [`CompressionErrorKind`].
+/// Plugins and the manager raise this (instead of a plain `anyhow!(...)`) at
+/// the points where the failure reason is already known, so callers can read
+/// off a stable category via [`classify_error`] instead of matching on
+/// message text.
+#[derive(Debug)]
+pub struct CompressionError {
+    pub kind: CompressionErrorKind,
+    pub message: String,
+}
+
+impl CompressionError {
+    pub fn new(kind: CompressionErrorKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for CompressionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for CompressionError {}
+
+/// Classify a compression failure into a coarse [`CompressionErrorKind`].
+/// Walks the error chain looking first for an explicit [`CompressionError`]
+/// (raised at a known failure point), then falls back to an [`std::io::Error`]'s
+/// kind, and finally `Unknown` for anything unrecognized.
+pub fn classify_error(err: &anyhow::Error) -> CompressionErrorKind {
+    for cause in err.chain() {
+        if let Some(e) = cause.downcast_ref::<CompressionError>() {
+            return e.kind;
+        }
+    }
+    for cause in err.chain() {
+        if let Some(io_err) = cause.downcast_ref::<std::io::Error>() {
+            return match io_err.kind() {
+                std::io::ErrorKind::PermissionDenied => CompressionErrorKind::PermissionDenied,
+                std::io::ErrorKind::NotFound => CompressionErrorKind::NotFound,
+                std::io::ErrorKind::AlreadyExists => CompressionErrorKind::OutputConflict,
+                _ => CompressionErrorKind::Io,
+            };
+        }
+    }
+    CompressionErrorKind::Unknown
+}
+
 /// Metadata about a compression plugin
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginMetadata {
@@ -223,11 +315,17 @@ impl PluginManager {
                     }
                 }
                 selected.ok_or_else(|| {
-                    anyhow!("No active plugin can handle file: {}", source.display())
+                    anyhow::Error::new(CompressionError::new(
+                        CompressionErrorKind::UnsupportedFormat,
+                        format!("No active plugin can handle file: {}", source.display()),
+                    ))
                 })?
             }
             None => self.find_plugin(source)?.ok_or_else(|| {
-                anyhow!("No suitable plugin found for file: {}", source.display())
+                anyhow::Error::new(CompressionError::new(
+                    CompressionErrorKind::UnsupportedFormat,
+                    format!("No suitable plugin found for file: {}", source.display()),
+                ))
             })?,
         };
 
@@ -251,12 +349,15 @@ impl PluginManager {
         let (can_handle, reason) = plugin.can_handle(source)?;
         if !can_handle {
             let reason_msg = reason.unwrap_or_else(|| "Unknown reason".to_string());
-            return Err(anyhow!(
-                "Plugin '{}' cannot handle file: {} (Reason: {})",
-                plugin_name,
-                source.display(),
-                reason_msg
-            ));
+            return Err(anyhow::Error::new(CompressionError::new(
+                CompressionErrorKind::UnsupportedFormat,
+                format!(
+                    "Plugin '{}' cannot handle file: {} (Reason: {})",
+                    plugin_name,
+                    source.display(),
+                    reason_msg
+                ),
+            )));
         }
 
         self.execute_plugin(plugin.as_ref(), source, output_dir, keep_backup)
@@ -295,11 +396,14 @@ impl PluginManager {
         let backup_path = backup_path_for(source);
         if let Err(e) = fs::rename(source, &backup_path) {
             let _ = fs::remove_file(&result.output_path);
-            return Err(anyhow!(
-                "Failed to back up original file {}: {}",
-                source.display(),
-                e
-            ));
+            return Err(anyhow::Error::new(CompressionError::new(
+                CompressionErrorKind::BackupFailed,
+                format!(
+                    "Failed to back up original file {}: {}",
+                    source.display(),
+                    e
+                ),
+            )));
         }
 
         if result.replace_source {
@@ -307,11 +411,14 @@ impl PluginManager {
                 // Restore the original so the user is never left without the file
                 let _ = fs::remove_file(&result.output_path);
                 let _ = fs::rename(&backup_path, source);
-                return Err(anyhow!(
-                    "Failed to move compressed output over {}: {}",
-                    source.display(),
-                    e
-                ));
+                return Err(anyhow::Error::new(CompressionError::new(
+                    CompressionErrorKind::BackupFailed,
+                    format!(
+                        "Failed to move compressed output over {}: {}",
+                        source.display(),
+                        e
+                    ),
+                )));
             }
             result.output_path = source.to_path_buf();
         }
@@ -466,9 +573,13 @@ pub fn create_output_file(path: &Path) -> Result<fs::File> {
         .open(path)
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::AlreadyExists {
-                anyhow!("Output file already exists: {}", path.display())
+                anyhow::Error::new(CompressionError::new(
+                    CompressionErrorKind::OutputConflict,
+                    format!("Output file already exists: {}", path.display()),
+                ))
             } else {
-                anyhow!("Failed to create output file {}: {}", path.display(), e)
+                anyhow::Error::new(e)
+                    .context(format!("Failed to create output file {}", path.display()))
             }
         })
 }
@@ -890,5 +1001,85 @@ mod tests {
         // Test non-existent extension
         let unknown_plugins = manager.get_plugins_by_extension("xyz");
         assert_eq!(unknown_plugins.len(), 0);
+    }
+
+    #[test]
+    fn test_classify_error_reads_explicit_compression_error() {
+        let err = anyhow::Error::new(CompressionError::new(
+            CompressionErrorKind::UnsupportedFormat,
+            "no plugin can handle this",
+        ));
+        assert_eq!(
+            classify_error(&err),
+            CompressionErrorKind::UnsupportedFormat
+        );
+    }
+
+    #[test]
+    fn test_classify_error_falls_back_to_io_error_kind() {
+        let not_found = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no such file",
+        ));
+        assert_eq!(classify_error(&not_found), CompressionErrorKind::NotFound);
+
+        let permission = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied",
+        ));
+        assert_eq!(
+            classify_error(&permission),
+            CompressionErrorKind::PermissionDenied
+        );
+
+        let other = anyhow::Error::new(std::io::Error::other("disk full"));
+        assert_eq!(classify_error(&other), CompressionErrorKind::Io);
+    }
+
+    #[test]
+    fn test_classify_error_finds_io_error_wrapped_in_context() {
+        let wrapped = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied",
+        ))
+        .context("Failed to create output file: /tmp/out.webp");
+        assert_eq!(
+            classify_error(&wrapped),
+            CompressionErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn test_classify_error_unknown_for_unrecognized_error() {
+        let err = anyhow!("something went wrong");
+        assert_eq!(classify_error(&err), CompressionErrorKind::Unknown);
+    }
+
+    #[test]
+    fn test_process_file_no_active_plugin_is_unsupported_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = temp_source(dir.path(), "test.txt", b"content");
+
+        let mut manager = PluginManager::new();
+        manager.register(Box::new(MockPlugin::new("Plugin1", &["txt"])));
+
+        let orders = vec!["Nonexistent Plugin".to_string()];
+        let err = manager
+            .process_file(&source, dir.path(), Some(&orders), true)
+            .unwrap_err();
+        assert_eq!(
+            classify_error(&err),
+            CompressionErrorKind::UnsupportedFormat
+        );
+    }
+
+    #[test]
+    fn test_create_output_file_conflict_is_output_conflict() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.webp");
+        fs::write(&path, b"existing").unwrap();
+
+        let err = create_output_file(&path).unwrap_err();
+        assert_eq!(classify_error(&err), CompressionErrorKind::OutputConflict);
     }
 }

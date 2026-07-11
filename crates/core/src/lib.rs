@@ -14,8 +14,9 @@ pub mod video_sim;
 pub use broken::{BrokenCategory, BrokenFileChecker, BrokenReason};
 pub use compress::Compressor;
 pub use compress_plugins::{
-    global_plugin_manager, init_plugin_manager_with, CompressionOutcome, CompressionPlugin,
-    CompressionResult, PluginManager, PluginMetadata,
+    classify_error, global_plugin_manager, init_plugin_manager_with, CompressionError,
+    CompressionErrorKind, CompressionOutcome, CompressionPlugin, CompressionResult, PluginManager,
+    PluginMetadata,
 };
 pub use filters::FileFilter;
 pub use hash::{FileHasher, HashAlgorithm};
