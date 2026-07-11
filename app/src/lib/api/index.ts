@@ -460,8 +460,14 @@ export async function scanCompressibleFiles(
       return { compressible: [], rejected: [] };
     }
 
-    // Mock scan results. "already-tiny" and "locked" are picked up by the
-    // compressFilesInPlace mock to demo the skipped/failed states in web mode.
+    // Mock scan results. "already-tiny", "locked", "corrupt", "unsupported",
+    // and "missing" are picked up by the compressFilesInPlace mock to demo
+    // the skipped/failed states in web mode. Several failure keywords appear
+    // more than once, and across more than one category, so a default
+    // scan-then-compress-all run actually shows a mixed Failed table (several
+    // categories, several items each) instead of a single lonely row —
+    // that's what makes the error_code breakdown/filter chips demo-able
+    // without hand-crafting a path list.
     const compressible: CompressibleFile[] = [
       {
         path: "/path/to/image.png",
@@ -496,6 +502,48 @@ export async function scanCompressibleFiles(
         original_size: 512000,
         estimated_compressed_size: 358400,
         estimated_savings: 153600,
+        plugin_name: "WebP Converter"
+      },
+      {
+        path: "/path/to/locked-config.png",
+        original_size: 460800,
+        estimated_compressed_size: 322560,
+        estimated_savings: 138240,
+        plugin_name: "WebP Converter"
+      },
+      {
+        path: "/path/to/corrupt-photo.png",
+        original_size: 204800,
+        estimated_compressed_size: 143360,
+        estimated_savings: 61440,
+        plugin_name: "WebP Converter"
+      },
+      {
+        path: "/path/to/corrupt-scan.png",
+        original_size: 307200,
+        estimated_compressed_size: 215040,
+        estimated_savings: 92160,
+        plugin_name: "WebP Converter"
+      },
+      {
+        path: "/path/to/unsupported-legacy.png",
+        original_size: 655360,
+        estimated_compressed_size: 458752,
+        estimated_savings: 196608,
+        plugin_name: "WebP Converter"
+      },
+      {
+        path: "/path/to/unsupported-format.png",
+        original_size: 819200,
+        estimated_compressed_size: 573440,
+        estimated_savings: 245760,
+        plugin_name: "WebP Converter"
+      },
+      {
+        path: "/path/to/missing-file.png",
+        original_size: 409600,
+        estimated_compressed_size: 286720,
+        estimated_savings: 122880,
         plugin_name: "WebP Converter"
       }
     ];
