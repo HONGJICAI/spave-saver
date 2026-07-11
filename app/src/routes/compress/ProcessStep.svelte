@@ -49,13 +49,29 @@
   let showAllCompressed = $state(false);
   let showAllFailed = $state(false);
   let showSkipped = $state(false);
+  let activeErrorCodeFilter = $state<string | null>(null);
 
   let displayedCompressedResults = $derived(
     showAllCompressed ? compressedResults : compressedResults.slice(0, 10)
   );
-  let displayedFailedResults = $derived(
-    showAllFailed ? failedResults.slice(0, MAX_RENDERED_FAILED_ROWS) : failedResults.slice(0, 10)
+
+  // Filtering by error_code narrows which failures are shown; the tag chips
+  // above the table (built from failureBreakdown) toggle this.
+  let filteredFailedResults = $derived(
+    activeErrorCodeFilter
+      ? failedResults.filter(result => (result.error_code ?? 'unknown') === activeErrorCodeFilter)
+      : failedResults
   );
+  let displayedFailedResults = $derived(
+    showAllFailed
+      ? filteredFailedResults.slice(0, MAX_RENDERED_FAILED_ROWS)
+      : filteredFailedResults.slice(0, 10)
+  );
+
+  function toggleErrorCodeFilter(code: string): void {
+    activeErrorCodeFilter = activeErrorCodeFilter === code ? null : code;
+    showAllFailed = false;
+  }
 
   function fileName(path: string): string {
     return path.split(/[\\/]/).pop() ?? path;
@@ -279,14 +295,32 @@
           </div>
         {:else}
           {#if failureBreakdown.length > 1}
-            <div class="flex flex-wrap gap-2 px-3 py-2 bg-red-50/50 border-b border-red-100">
+            <div class="flex flex-wrap items-center gap-2 px-3 py-2 bg-red-50/50 border-b border-red-100">
               {#each failureBreakdown as [code, count]}
-                <span class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">
+                <button
+                  onclick={() => toggleErrorCodeFilter(code)}
+                  class="text-xs px-2 py-0.5 rounded-full font-medium transition-colors {activeErrorCodeFilter === code
+                    ? 'bg-red-600 text-white'
+                    : 'bg-red-100 text-red-700 hover:bg-red-200'}"
+                >
                   {errorCodeLabel(code)}: {count}
-                </span>
+                </button>
               {/each}
+              {#if activeErrorCodeFilter}
+                <button
+                  onclick={() => (activeErrorCodeFilter = null)}
+                  class="text-xs px-2 py-0.5 rounded-full font-medium text-gray-600 hover:text-gray-800 underline"
+                >
+                  Clear filter
+                </button>
+              {/if}
             </div>
           {/if}
+          {#if activeErrorCodeFilter && filteredFailedResults.length === 0}
+            <div class="p-8 text-center text-gray-500 text-sm">
+              No failures match this filter
+            </div>
+          {:else}
           <table class="w-full text-sm">
             <thead class="bg-gray-50 sticky top-0">
               <tr class="text-left text-xs text-gray-600 border-b">
@@ -315,20 +349,21 @@
               {/each}
             </tbody>
           </table>
-          {#if failedResults.length > 10}
+          {#if filteredFailedResults.length > 10}
             <div class="p-2 bg-gray-50 border-t border-gray-200 text-center">
               <button
                 onclick={() => showAllFailed = !showAllFailed}
                 class="text-xs text-blue-600 hover:text-blue-800 font-medium"
               >
-                {showAllFailed ? `Show Less (10 of ${failedResults.length})` : `Show All (${failedResults.length})`}
+                {showAllFailed ? `Show Less (10 of ${filteredFailedResults.length})` : `Show All (${filteredFailedResults.length})`}
               </button>
             </div>
           {/if}
-          {#if showAllFailed && failedResults.length > MAX_RENDERED_FAILED_ROWS}
+          {#if showAllFailed && filteredFailedResults.length > MAX_RENDERED_FAILED_ROWS}
             <p class="px-3 py-1.5 text-xs text-gray-500 bg-gray-50 border-t border-gray-200">
-              Showing the first {MAX_RENDERED_FAILED_ROWS} of {failedResults.length} to keep the page responsive
+              Showing the first {MAX_RENDERED_FAILED_ROWS} of {filteredFailedResults.length} to keep the page responsive
             </p>
+          {/if}
           {/if}
         {/if}
       </div>
