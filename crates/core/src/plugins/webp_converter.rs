@@ -5,8 +5,8 @@ use std::path::Path;
 use tracing::{debug, error, info};
 
 use crate::compress_plugins::{
-    create_output_file, generate_output_filename, get_file_size, has_extension, CompressionPlugin,
-    CompressionResult, PluginMetadata,
+    create_output_file, generate_output_filename, get_file_size, has_extension, CompressionError,
+    CompressionErrorKind, CompressionPlugin, CompressionResult, PluginMetadata,
 };
 
 /// Plugin for converting images to WebP format
@@ -116,9 +116,10 @@ impl WebPConverterPlugin {
                     error = %e,
                     "Failed to open image for WebP conversion"
                 );
-                return Err(
-                    anyhow::anyhow!("Failed to open image: {}", source.display()).context(e),
-                );
+                return Err(anyhow::Error::new(CompressionError::new(
+                    CompressionErrorKind::CorruptFile,
+                    format!("Failed to open image {}: {}", source.display(), e),
+                )));
             }
         };
 
@@ -144,10 +145,10 @@ impl WebPConverterPlugin {
                     error = %e,
                     "Failed to encode image to WebP format"
                 );
-                Err(
-                    anyhow::anyhow!("Failed to encode image to WebP: {}", source.display())
-                        .context(e),
-                )
+                Err(anyhow::Error::new(CompressionError::new(
+                    CompressionErrorKind::EncodeFailed,
+                    format!("Failed to encode image to WebP {}: {}", source.display(), e),
+                )))
             }
         }
     }
@@ -296,7 +297,9 @@ impl CompressionPlugin for WebPConverterPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compress_plugins::{CompressionOutcome, PluginManager};
+    use crate::compress_plugins::{
+        classify_error, CompressionErrorKind, CompressionOutcome, PluginManager,
+    };
     use image::{ImageBuffer, Rgb, RgbImage};
     use std::path::PathBuf;
 
@@ -470,5 +473,23 @@ mod tests {
         assert!(extensions.contains(&"png"));
         assert!(extensions.contains(&"jpg"));
         assert!(extensions.contains(&"jpeg"));
+    }
+
+    #[test]
+    fn test_corrupt_image_fails_as_corrupt_file() {
+        let dir = tempfile::tempdir().unwrap();
+        // Right extension, garbage content: can_handle passes (extension-based),
+        // but the image crate cannot decode it
+        let source = dir.path().join("garbage.png");
+        fs::write(&source, b"not a real png").unwrap();
+
+        let mut manager = PluginManager::new();
+        manager.register(Box::new(WebPConverterPlugin::new()));
+
+        let err = manager
+            .process_file(&source, dir.path(), None, true)
+            .unwrap_err();
+        assert_eq!(classify_error(&err), CompressionErrorKind::CorruptFile);
+        assert!(source.exists(), "corrupt source must be left untouched");
     }
 }

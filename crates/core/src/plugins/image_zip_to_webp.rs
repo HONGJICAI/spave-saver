@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use zip::{write::FileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::compress_plugins::{
-    create_output_file, get_file_size, has_extension, CompressionPlugin, CompressionResult,
-    PluginMetadata,
+    create_output_file, get_file_size, has_extension, CompressionError, CompressionErrorKind,
+    CompressionPlugin, CompressionResult, PluginMetadata,
 };
 
 /// Plugin for converting ZIP files containing images to WebP format
@@ -49,7 +49,12 @@ impl ImageZipToWebpZipPlugin {
 
     fn has_convertible_images(&self, path: &Path) -> Result<bool> {
         let file = File::open(path)?;
-        let mut archive = ZipArchive::new(file)?;
+        let mut archive = ZipArchive::new(file).map_err(|e| {
+            anyhow::Error::new(CompressionError::new(
+                CompressionErrorKind::CorruptFile,
+                format!("Failed to read ZIP archive {}: {}", path.display(), e),
+            ))
+        })?;
 
         let total_files = archive.len();
         if total_files == 0 {
@@ -103,7 +108,12 @@ impl ImageZipToWebpZipPlugin {
 
     fn process_zip(&self, source: &Path, output: &Path) -> Result<(usize, u64, u64)> {
         let input_file = File::open(source)?;
-        let mut input_archive = ZipArchive::new(input_file)?;
+        let mut input_archive = ZipArchive::new(input_file).map_err(|e| {
+            anyhow::Error::new(CompressionError::new(
+                CompressionErrorKind::CorruptFile,
+                format!("Failed to read ZIP archive {}: {}", source.display(), e),
+            ))
+        })?;
 
         // create_new (O_EXCL): fails instead of overwriting a concurrent
         // writer's output with the same name
@@ -370,7 +380,11 @@ mod tests {
         // A corrupt "ZIP" must surface as an error, not a panic
         let fake_zip = dir.path().join("fake.zip");
         fs::write(&fake_zip, b"this is not a zip archive").unwrap();
-        assert!(plugin.can_handle(&fake_zip).is_err());
+        let err = plugin.can_handle(&fake_zip).unwrap_err();
+        assert_eq!(
+            crate::compress_plugins::classify_error(&err),
+            crate::compress_plugins::CompressionErrorKind::CorruptFile
+        );
     }
 
     #[test]

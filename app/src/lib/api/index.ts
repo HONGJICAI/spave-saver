@@ -355,6 +355,31 @@ export interface ScanCompressibleResult {
 export type CompressionStatus = "compressed" | "skipped" | "failed";
 
 /**
+ * Coarse classification of a compression failure (only set when status is
+ * "failed"), so the UI can group/filter failures instead of parsing the
+ * free-text `error` message:
+ * - not_found: source file did not exist when compression started
+ * - unsupported_format: no active plugin can handle this file
+ * - corrupt_file: the file's content could not be decoded (corrupt image/zip)
+ * - encode_failed: the compression/encode step itself failed
+ * - output_conflict: the output path collided with an existing file
+ * - backup_failed: backing up or replacing the original file failed
+ * - permission_denied: the OS denied the operation
+ * - io: any other I/O failure (disk full, device error, ...)
+ * - unknown: could not be classified into any of the above
+ */
+export type CompressionErrorCode =
+  | "not_found"
+  | "unsupported_format"
+  | "corrupt_file"
+  | "encode_failed"
+  | "output_conflict"
+  | "backup_failed"
+  | "permission_denied"
+  | "io"
+  | "unknown";
+
+/**
  * In-place compression result
  */
 export interface InPlaceCompressionResult {
@@ -368,6 +393,7 @@ export interface InPlaceCompressionResult {
   plugin_name?: string;
   reason?: string;
   error?: string;
+  error_code?: CompressionErrorCode;
 }
 
 /**
@@ -530,11 +556,16 @@ export async function compressFilesInPlace(
       createBackup
     });
   } else {
-    // Mock in-place compression. Status is derived from the file name so the
-    // three-state UI (compressed / skipped / failed) can be previewed in web
-    // mode: "already-tiny" files skip (and are remembered by the mock skip
-    // cache, like the backend), "locked" files fail with a permission error,
-    // "missing" files fail with "File not found", the rest compress.
+    // Mock in-place compression. Status (and, for failures, error_code) is
+    // derived from the file name so the compressed/skipped/failed states and
+    // failure categories can be previewed in web mode: "already-tiny" files
+    // skip (and are remembered by the mock skip cache, like the backend),
+    // "locked" files fail backing up the original with a permission error
+    // (error_code: backup_failed), "missing" files fail with "File not
+    // found" (error_code: not_found), "corrupt" files fail decoding
+    // (error_code: corrupt_file), "unsupported" files fail because no active
+    // plugin can handle them (error_code: unsupported_format), the rest
+    // compress.
     await new Promise(resolve => setTimeout(resolve, 200));
     return filePaths.map(path => {
       if (path.includes("already-tiny")) {
@@ -552,7 +583,8 @@ export async function compressFilesInPlace(
           status: "failed" as const,
           success: false,
           path,
-          error: "File not found"
+          error: "File not found",
+          error_code: "not_found" as const
         };
       }
       if (path.includes("locked")) {
@@ -560,7 +592,26 @@ export async function compressFilesInPlace(
           status: "failed" as const,
           success: false,
           path,
-          error: "Failed to back up original file: Permission denied (os error 13)"
+          error: "Failed to back up original file: Permission denied (os error 13)",
+          error_code: "backup_failed" as const
+        };
+      }
+      if (path.includes("corrupt")) {
+        return {
+          status: "failed" as const,
+          success: false,
+          path,
+          error: `Failed to open image ${path}: Format error decoding Png: invalid header`,
+          error_code: "corrupt_file" as const
+        };
+      }
+      if (path.includes("unsupported")) {
+        return {
+          status: "failed" as const,
+          success: false,
+          path,
+          error: `No active plugin can handle file: ${path}`,
+          error_code: "unsupported_format" as const
         };
       }
       return {

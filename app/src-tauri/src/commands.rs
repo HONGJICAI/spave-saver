@@ -439,6 +439,7 @@ pub async fn compress_files_in_place(
     plugin_orders: Vec<String>, // Ordered list of active plugin names
     create_backup: bool,        // false: delete the original once compression succeeds
 ) -> Result<Vec<serde_json::Value>, String> {
+    use space_saver_core::compress_plugins::classify_error;
     use space_saver_core::CompressionOutcome;
     use std::path::PathBuf;
 
@@ -464,6 +465,7 @@ pub async fn compress_files_in_place(
                 "success": false,
                 "path": path_str,
                 "error": "File not found",
+                "error_code": "not_found",
             }));
             continue;
         }
@@ -516,6 +518,7 @@ pub async fn compress_files_in_place(
                     "success": false,
                     "path": path_str,
                     "error": e.to_string(),
+                    "error_code": classify_error(&e).as_str(),
                 }));
             }
         }
@@ -740,10 +743,12 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("No active plugin"));
+        assert_eq!(results[0]["error_code"], "unsupported_format");
         assert!(source.exists(), "file must be untouched on failure");
 
         assert_eq!(results[1]["status"], "failed");
         assert_eq!(results[1]["error"], "File not found");
+        assert_eq!(results[1]["error_code"], "not_found");
     }
 
     #[tokio::test]

@@ -64,6 +64,33 @@
   function dirName(path: string): string {
     return path.split(/[\\/]/).slice(0, -1).join('/');
   }
+
+  const ERROR_CODE_LABELS: Record<string, string> = {
+    not_found: 'Not Found',
+    unsupported_format: 'Unsupported Format',
+    corrupt_file: 'Corrupt File',
+    encode_failed: 'Encode Failed',
+    output_conflict: 'Output Conflict',
+    backup_failed: 'Backup Failed',
+    permission_denied: 'Permission Denied',
+    io: 'I/O Error',
+    unknown: 'Unknown'
+  };
+
+  function errorCodeLabel(code: string | undefined): string {
+    return ERROR_CODE_LABELS[code ?? 'unknown'] ?? code ?? 'Unknown';
+  }
+
+  // Groups failures by error_code so users can see which categories of
+  // failure dominate without reading every row's message individually.
+  let failureBreakdown = $derived.by(() => {
+    const counts = new Map<string, number>();
+    for (const result of failedResults) {
+      const code = result.error_code ?? 'unknown';
+      counts.set(code, (counts.get(code) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  });
 </script>
 
 <div class="bg-white rounded-lg shadow p-6">
@@ -251,6 +278,15 @@
             No errors
           </div>
         {:else}
+          {#if failureBreakdown.length > 1}
+            <div class="flex flex-wrap gap-2 px-3 py-2 bg-red-50/50 border-b border-red-100">
+              {#each failureBreakdown as [code, count]}
+                <span class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">
+                  {errorCodeLabel(code)}: {count}
+                </span>
+              {/each}
+            </div>
+          {/if}
           <table class="w-full text-sm">
             <thead class="bg-gray-50 sticky top-0">
               <tr class="text-left text-xs text-gray-600 border-b">
@@ -270,6 +306,9 @@
                     </p>
                   </td>
                   <td class="px-3 py-2">
+                    <span class="inline-block text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-medium mb-1">
+                      {errorCodeLabel(result.error_code)}
+                    </span>
                     <p class="text-xs text-red-600">{result.error}</p>
                   </td>
                 </tr>
