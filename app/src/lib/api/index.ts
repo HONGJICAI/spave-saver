@@ -394,6 +394,12 @@ export interface InPlaceCompressionResult {
   reason?: string;
   error?: string;
   error_code?: CompressionErrorCode;
+  /**
+   * Only set when status is "compressed": one message per part the plugin
+   * left unconverted (e.g. an undecodable image inside a ZIP/CBZ, which is
+   * kept as is). Non-empty means the compression succeeded only partially.
+   */
+  warnings?: string[];
 }
 
 /**
@@ -461,7 +467,7 @@ export async function scanCompressibleFiles(
     }
 
     // Mock scan results. "already-tiny", "locked", "corrupt", "unsupported",
-    // and "missing" are picked up by the compressFilesInPlace mock to demo
+    // "partial" and "missing" are picked up by the compressFilesInPlace mock to demo
     // the skipped/failed states in web mode. Several failure keywords appear
     // more than once, and across more than one category, so a default
     // scan-then-compress-all run actually shows a mixed Failed table (several
@@ -488,6 +494,13 @@ export async function scanCompressibleFiles(
         original_size: 5120000,
         estimated_compressed_size: 3686400,
         estimated_savings: 1433600,
+        plugin_name: "Image ZIP to WebP ZIP"
+      },
+      {
+        path: "/path/to/comics/chapter-01-partial.cbz",
+        original_size: 8388608,
+        estimated_compressed_size: 6039797,
+        estimated_savings: 2348811,
         plugin_name: "Image ZIP to WebP ZIP"
       },
       {
@@ -558,6 +571,17 @@ export async function scanCompressibleFiles(
             reason: "File extension not supported"
           }
         ]
+      },
+      {
+        path: "/path/to/private/scans-encrypted.zip",
+        size: 3145728,
+        extension: "zip",
+        rejection_reasons: [
+          {
+            plugin_name: "Image ZIP to WebP ZIP",
+            reason: "ZIP archive contains encrypted entries"
+          }
+        ]
       }
     ];
 
@@ -612,8 +636,9 @@ export async function compressFilesInPlace(
     // (error_code: backup_failed), "missing" files fail with "File not
     // found" (error_code: not_found), "corrupt" files fail decoding
     // (error_code: corrupt_file), "unsupported" files fail because no active
-    // plugin can handle them (error_code: unsupported_format), the rest
-    // compress.
+    // plugin can handle them (error_code: unsupported_format), "partial"
+    // archives compress with warnings for the pages left unconverted (like
+    // an undecodable image inside a ZIP/CBZ), the rest compress.
     await new Promise(resolve => setTimeout(resolve, 200));
     return filePaths.map(path => {
       if (path.includes("already-tiny")) {
@@ -653,6 +678,23 @@ export async function compressFilesInPlace(
           error_code: "corrupt_file" as const
         };
       }
+      if (path.includes("partial")) {
+        const savings = 2348811;
+        return {
+          status: "compressed" as const,
+          success: true,
+          path,
+          ...(createBackup ? { backup_path: `${path}.bak` } : {}),
+          original_size: 8388608,
+          compressed_size: 8388608 - savings,
+          savings,
+          plugin_name: "Image ZIP to WebP ZIP",
+          warnings: [
+            "page-07.png: Failed to decode image: page-07.png: Format error decoding Png: CRC error: expected 0x5a1e2f3c have 0x00000000 while decoding IDAT chunk; kept as is",
+            "page-12.jpg: Failed to decode image: page-12.jpg: Format error decoding Jpeg: premature end of file; kept as is"
+          ]
+        };
+      }
       if (path.includes("unsupported")) {
         return {
           status: "failed" as const,
@@ -670,7 +712,8 @@ export async function compressFilesInPlace(
         original_size: 1024000,
         compressed_size: 716800,
         savings: 307200,
-        plugin_name: "WebP Converter"
+        plugin_name: "WebP Converter",
+        warnings: []
       };
     });
   }

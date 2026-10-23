@@ -261,6 +261,50 @@ describe('API Layer', () => {
       expect(results[0].success).toBe(true);
       expect(results[0].backup_path).toBe('/photos/a.png.bak');
       expect(results[0].savings).toBeGreaterThan(0);
+      expect(results[0].warnings).toEqual([]);
+    });
+
+    it('compressFilesInPlace reports partial archive conversions with warnings', async () => {
+      const results = await compressFilesInPlace(
+        ['/comics/chapter-partial.cbz'],
+        ['Image ZIP to WebP ZIP']
+      );
+
+      expect(results[0].status).toBe('compressed');
+      expect(results[0].success).toBe(true);
+      expect(results[0].plugin_name).toBe('Image ZIP to WebP ZIP');
+      expect(results[0].backup_path).toBe('/comics/chapter-partial.cbz.bak');
+      expect(results[0].savings).toBe(
+        (results[0].original_size ?? 0) - (results[0].compressed_size ?? 0)
+      );
+      expect(results[0].warnings?.length).toBeGreaterThan(0);
+      for (const warning of results[0].warnings ?? []) {
+        // Same shape as the backend: "<entry>: <reason>; kept as is"
+        expect(warning).toMatch(/^[^:]+: .+; kept as is$/);
+      }
+    });
+
+    it('compressFilesInPlace partial result omits backup_path when backups are disabled', async () => {
+      const results = await compressFilesInPlace(
+        ['/comics/chapter-partial.cbz'],
+        ['Image ZIP to WebP ZIP'],
+        false
+      );
+
+      expect(results[0].status).toBe('compressed');
+      expect(results[0].backup_path).toBeUndefined();
+      expect(results[0].warnings?.length).toBeGreaterThan(0);
+    });
+
+    it('scanCompressibleFiles mock includes a CBZ archive and an encrypted ZIP rejection', async () => {
+      const result = await scanCompressibleFiles(['/test/path'], ['Image ZIP to WebP ZIP']);
+
+      expect(result.compressible.some(f => f.path.endsWith('.cbz'))).toBe(true);
+      const encrypted = result.rejected.find(f => f.path.includes('encrypted'));
+      expect(encrypted?.rejection_reasons[0]).toEqual({
+        plugin_name: 'Image ZIP to WebP ZIP',
+        reason: 'ZIP archive contains encrypted entries'
+      });
     });
 
     it('compressFilesInPlace mock covers all three result states', async () => {
@@ -342,6 +386,11 @@ describe('API Layer', () => {
       expect(counts.get('backup_failed')).toBeGreaterThanOrEqual(2);
       expect(counts.get('corrupt_file')).toBeGreaterThanOrEqual(2);
       expect(counts.get('unsupported_format')).toBeGreaterThanOrEqual(2);
+
+      // ...and at least one partial (compressed with warnings) result
+      expect(
+        results.some(r => r.status === 'compressed' && (r.warnings?.length ?? 0) > 0)
+      ).toBe(true);
     });
 
     it('setPluginQuality rejects unknown plugins with the backend error string', async () => {

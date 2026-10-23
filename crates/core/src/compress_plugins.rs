@@ -20,6 +20,11 @@ pub struct CompressionResult {
     /// backing up the original (e.g. ZIP-to-ZIP conversion keeps the name)
     #[serde(default)]
     pub replace_source: bool,
+    /// Parts of the input the plugin could not process and left as they were
+    /// (e.g. an undecodable image inside an archive); the result is still a
+    /// success, but the user should know it is partial
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 /// Outcome of running a plugin through the manager
@@ -658,6 +663,7 @@ mod tests {
                 files_processed: 1,
                 backup_path: None,
                 replace_source: self.replace_source,
+                warnings: Vec::new(),
             })
         }
 

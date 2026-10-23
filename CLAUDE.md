@@ -87,6 +87,7 @@ mock 数据本身的要求：
   - 路径含 `missing` → 压缩 failed（File not found，`error_code: not_found`）
   - 路径含 `corrupt` → 压缩 failed（文件内容无法解码，`error_code: corrupt_file`）
   - 路径含 `unsupported` → 压缩 failed（没有可用插件处理该文件，`error_code: unsupported_format`）
+  - 路径含 `partial` → 压缩 compressed 但带 `warnings`（压缩包里部分图片无法转换、原样保留，演示部分成功）
   - 路径含 `empty-dir` → 各扫描类接口返回空结果（演示空状态 UI）
   - 新增状态时按同样模式扩展，并在 mock 代码注释里说明触发词
 - 压缩失败的 `error_code`（`CompressionErrorCode`，对应后端 `CompressionErrorKind::as_str()`）是粗粒度分类，而非对每种系统错误的精确穷举：`not_found` / `unsupported_format` / `corrupt_file` / `encode_failed` / `output_conflict` / `backup_failed` 是业务语义分类（在抛错的地方显式打标，见 `crates/core/src/compress_plugins.rs` 的 `CompressionError`），`permission_denied` / `io` 是兜底的系统级分类（由 `classify_error` 按 `std::io::ErrorKind` 归类），`unknown` 是完全无法识别时的兜底。新增失败场景时优先补一个有业务含义的分类，而不是让它落入 `unknown` 或泛化到 `io`。

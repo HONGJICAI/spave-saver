@@ -490,6 +490,9 @@ pub async fn compress_files_in_place(
                     "compressed_size": compress_result.compressed_size,
                     "savings": compress_result.original_size.saturating_sub(compress_result.compressed_size),
                     "plugin_name": compress_result.plugin_name,
+                    // Parts left unconverted (e.g. an undecodable image in an
+                    // archive): still a success, but a partial one
+                    "warnings": compress_result.warnings,
                 }));
             }
             Ok(CompressionOutcome::Skipped {
@@ -716,6 +719,48 @@ mod tests {
             results[0]["savings"].as_u64().unwrap() > 0,
             "noise PNG must shrink as WebP"
         );
+        assert_eq!(results[0]["warnings"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn compress_in_place_reports_partial_archive_warnings() {
+        use std::io::Write;
+        use zip::{write::FileOptions, CompressionMethod, ZipWriter};
+
+        let dir = tempfile::tempdir().unwrap();
+        let png_path = dir.path().join("page.png");
+        save_noise_png(&png_path, 128, 128);
+        let png = fs::read(&png_path).unwrap();
+        fs::remove_file(&png_path).unwrap();
+
+        // A comic archive with one good page and one that cannot be decoded
+        let source = dir.path().join("chapter.cbz");
+        let mut writer = ZipWriter::new(fs::File::create(&source).unwrap());
+        let options = FileOptions::default().compression_method(CompressionMethod::Stored);
+        writer.start_file("001.png", options).unwrap();
+        writer.write_all(&png).unwrap();
+        writer.start_file("002.png", options).unwrap();
+        writer.write_all(b"not a png").unwrap();
+        writer.finish().unwrap();
+
+        let results = compress_files_in_place(
+            vec![source.to_string_lossy().to_string()],
+            vec!["Image ZIP to WebP ZIP".to_string()],
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["status"], "compressed", "{}", results[0]);
+        // Replaced in place, keeping the .cbz name
+        assert!(results[0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("chapter.cbz"));
+        let warnings = results[0]["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].as_str().unwrap().starts_with("002.png:"));
     }
 
     #[tokio::test]

@@ -277,6 +277,7 @@ impl CompressionPlugin for WebPConverterPlugin {
             files_processed: 1,
             backup_path: None,
             replace_source: false,
+            warnings: Vec::new(),
         })
     }
 
