@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use image::DynamicImage;
+use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use tracing::warn;
 use zip::{write::FileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::compress_plugins::{
@@ -35,6 +37,7 @@ impl ImageZipToWebpZipPlugin {
         self
     }
 
+    /// Images this plugin converts to WebP
     fn is_image_file(filename: &str) -> bool {
         let lower = filename.to_lowercase();
         lower.ends_with(".png")
@@ -47,6 +50,59 @@ impl ImageZipToWebpZipPlugin {
         filename.to_lowercase().ends_with(".webp")
     }
 
+    /// Images that count toward the image ratio but are copied as is
+    /// (already WebP, or animated formats a still WebP would flatten)
+    fn is_passthrough_image(filename: &str) -> bool {
+        Self::is_webp(filename) || filename.to_lowercase().ends_with(".gif")
+    }
+
+    /// Files that archivers and operating systems drop into image archives.
+    /// They do not count against `min_image_ratio` and are copied as is.
+    fn is_incidental_file(filename: &str) -> bool {
+        let lower = filename.to_lowercase();
+        if lower.starts_with("__macosx/") || lower.contains("/__macosx/") {
+            return true;
+        }
+        let base = lower.rsplit('/').next().unwrap_or(&lower);
+        matches!(
+            base,
+            "comicinfo.xml" | "thumbs.db" | ".ds_store" | "desktop.ini"
+        )
+    }
+
+    /// Decode an entry name from its raw bytes. zip 0.6 decodes names without
+    /// the UTF-8 flag as CP437, which mangles UTF-8 names from tools that do
+    /// not set the flag and GBK names from Chinese Windows. The writer always
+    /// stores names as UTF-8, so a name decoded wrongly here would be
+    /// corrupted in the output. Raw bytes that are neither valid UTF-8 nor
+    /// valid GBK fall back to the reader's CP437 decoding (the ZIP default).
+    fn decode_entry_name(raw: &[u8], fallback: &str) -> String {
+        if let Ok(name) = std::str::from_utf8(raw) {
+            return name.to_string();
+        }
+        if let Some(name) =
+            encoding_rs::GBK.decode_without_bom_handling_and_without_replacement(raw)
+        {
+            return name.into_owned();
+        }
+        fallback.to_string()
+    }
+
+    /// Pick the output name for a converted image: `a.png` -> `a.webp`, or
+    /// `a.png.webp` when `a.webp` is already taken by another entry or an
+    /// earlier conversion. None when both are taken, so the image is kept.
+    /// `taken` holds lowercased names: extracting on Windows/macOS is
+    /// case-insensitive, so `A.webp` and `a.webp` would overwrite each other.
+    fn webp_name_for(name: &str, taken: &HashSet<String>) -> Option<String> {
+        let replaced = match name.rfind('.') {
+            Some(idx) => format!("{}.webp", &name[..idx]),
+            None => format!("{}.webp", name),
+        };
+        [replaced, format!("{}.webp", name)]
+            .into_iter()
+            .find(|candidate| !taken.contains(&candidate.to_lowercase()))
+    }
+
     fn has_convertible_images(&self, path: &Path) -> Result<bool> {
         let file = File::open(path)?;
         let mut archive = ZipArchive::new(file).map_err(|e| {
@@ -56,32 +112,37 @@ impl ImageZipToWebpZipPlugin {
             ))
         })?;
 
-        let total_files = archive.len();
-        if total_files == 0 {
-            return Ok(false);
-        }
-
+        let mut counted_files = 0;
         let mut image_count = 0;
-        let mut webp_count = 0;
+        let mut convertible_count = 0;
 
-        for i in 0..total_files {
-            let file = archive.by_index(i)?;
+        for i in 0..archive.len() {
+            let file = archive.by_index_raw(i)?;
             let name = file.name();
+
+            // Directory entries and OS clutter say nothing about the content
+            if file.is_dir() || Self::is_incidental_file(name) {
+                continue;
+            }
+            counted_files += 1;
 
             if Self::is_image_file(name) {
                 image_count += 1;
-                if Self::is_webp(name) {
-                    webp_count += 1;
-                }
+                convertible_count += 1;
+            } else if Self::is_passthrough_image(name) {
+                image_count += 1;
             }
         }
 
+        if counted_files == 0 {
+            return Ok(false);
+        }
+
         // Only process if:
-        // 1. There are images in the ZIP
-        // 2. Not all images are already WebP
-        // 3. Images make up at least min_image_ratio of all files
-        let image_ratio = image_count as f32 / total_files as f32;
-        Ok(image_count > 0 && webp_count < image_count && image_ratio >= self.min_image_ratio)
+        // 1. There are images that are not WebP yet
+        // 2. Images make up at least min_image_ratio of the counted files
+        let image_ratio = image_count as f32 / counted_files as f32;
+        Ok(convertible_count > 0 && image_ratio >= self.min_image_ratio)
     }
 
     fn convert_image_to_webp(&self, data: &[u8], original_name: &str) -> Result<Vec<u8>> {
@@ -106,7 +167,12 @@ impl ImageZipToWebpZipPlugin {
         Ok(encoded.to_vec())
     }
 
-    fn process_zip(&self, source: &Path, output: &Path) -> Result<(usize, u64, u64)> {
+    /// Write a copy of `source` to `output` with its images converted to
+    /// WebP. Returns the number of images converted. An image is kept as is
+    /// when it fails to decode, its WebP is not smaller, or no free name is
+    /// left for the WebP entry. Every other entry is copied byte for byte
+    /// (compressed data, timestamp, permissions) under its decoded name.
+    fn process_zip(&self, source: &Path, output: &Path) -> Result<usize> {
         let input_file = File::open(source)?;
         let mut input_archive = ZipArchive::new(input_file).map_err(|e| {
             anyhow::Error::new(CompressionError::new(
@@ -115,70 +181,69 @@ impl ImageZipToWebpZipPlugin {
             ))
         })?;
 
+        let mut names = Vec::with_capacity(input_archive.len());
+        for i in 0..input_archive.len() {
+            let file = input_archive.by_index_raw(i)?;
+            names.push(Self::decode_entry_name(file.name_raw(), file.name()));
+        }
+        // Reserve every existing name so a converted image never shadows one
+        let mut taken: HashSet<String> = names.iter().map(|n| n.to_lowercase()).collect();
+
         // create_new (O_EXCL): fails instead of overwriting a concurrent
         // writer's output with the same name
         let output_file = create_output_file(output)?;
         let mut output_archive = ZipWriter::new(output_file);
 
-        let options = FileOptions::default()
-            .compression_method(CompressionMethod::Deflated)
-            .compression_level(Some(6));
-
         let mut files_processed = 0;
-        let mut original_total = 0u64;
-        let mut compressed_total = 0u64;
 
-        for i in 0..input_archive.len() {
+        for (i, name) in names.iter().enumerate() {
             let mut file = input_archive.by_index(i)?;
-            let name = file.name().to_string();
-            let original_size = file.size();
 
-            // Read file contents
-            let mut contents = Vec::new();
-            file.read_to_end(&mut contents)?;
-            drop(file); // Release the borrow
+            if file.is_dir() {
+                let options = FileOptions::default().last_modified_time(file.last_modified());
+                output_archive.add_directory(name.as_str(), options)?;
+                continue;
+            }
 
-            original_total += original_size;
+            if Self::is_image_file(name) {
+                let last_modified = file.last_modified();
+                let mut contents = Vec::new();
+                file.read_to_end(&mut contents)?;
+                drop(file); // Release the borrow
 
-            if Self::is_image_file(&name) && !Self::is_webp(&name) {
-                // Convert image to WebP
-                match self.convert_image_to_webp(&contents, &name) {
-                    Ok(webp_data) => {
-                        // Change extension to .webp
-                        let new_name = if let Some(idx) = name.rfind('.') {
-                            format!("{}.webp", &name[..idx])
-                        } else {
-                            format!("{}.webp", name)
-                        };
-
-                        output_archive.start_file(new_name, options)?;
-                        output_archive.write_all(&webp_data)?;
-
-                        compressed_total += webp_data.len() as u64;
-                        files_processed += 1;
+                match self.convert_image_to_webp(&contents, name) {
+                    Ok(webp_data) if webp_data.len() < contents.len() => {
+                        if let Some(new_name) = Self::webp_name_for(name, &taken) {
+                            taken.insert(new_name.to_lowercase());
+                            // WebP is already compressed; deflating it again
+                            // only costs CPU
+                            let options = FileOptions::default()
+                                .compression_method(CompressionMethod::Stored)
+                                .last_modified_time(last_modified);
+                            output_archive.start_file(new_name, options)?;
+                            output_archive.write_all(&webp_data)?;
+                            files_processed += 1;
+                            continue;
+                        }
+                        warn!(entry = %name, "No free name for the WebP entry; keeping original");
                     }
+                    // WebP is not smaller (e.g. an already well-compressed JPEG)
+                    Ok(_) => {}
                     Err(e) => {
-                        // If conversion fails, copy original file
-                        eprintln!(
-                            "Warning: Failed to convert {}: {}. Copying original.",
-                            name, e
-                        );
-                        output_archive.start_file(name, options)?;
-                        output_archive.write_all(&contents)?;
-                        compressed_total += contents.len() as u64;
+                        warn!(entry = %name, error = %e, "Failed to convert image; keeping original");
                     }
                 }
-            } else {
-                // Copy non-image files or already-WebP files as-is
-                output_archive.start_file(name, options)?;
-                output_archive.write_all(&contents)?;
-                compressed_total += contents.len() as u64;
+
+                // Reopen the entry to copy the original bytes
+                file = input_archive.by_index(i)?;
             }
+
+            output_archive.raw_copy_file_rename(file, name.as_str())?;
         }
 
         output_archive.finish()?;
 
-        Ok((files_processed, original_total, compressed_total))
+        Ok(files_processed)
     }
 }
 
@@ -267,7 +332,7 @@ impl CompressionPlugin for ImageZipToWebpZipPlugin {
         // Process the ZIP file (the output is created with create_new, so an
         // existing file fails the operation); the manager backs up the
         // original and moves the output over the source path (replace_source)
-        let (files_processed, _original_total, _compressed_total) = self
+        let files_processed = self
             .process_zip(source, &output_path)
             .with_context(|| format!("Failed to process ZIP file: {}", source.display()))?;
 
@@ -425,6 +490,400 @@ mod tests {
                 );
             }
             other => panic!("expected Compressed, got {:?}", other),
+        }
+    }
+
+    /// JPEG of noise at low quality: the WebP of its decoded pixels is
+    /// reliably larger than the JPEG itself
+    fn low_quality_noise_jpeg() -> Vec<u8> {
+        let img = image::load_from_memory(&noise_png_bytes(64, 64)).unwrap();
+        let mut buf = Vec::new();
+        img.write_to(
+            &mut Cursor::new(&mut buf),
+            image::ImageOutputFormat::Jpeg(20),
+        )
+        .unwrap();
+        buf
+    }
+
+    /// Build a ZIP from entries; a name ending in '/' becomes a directory
+    fn build_zip_with_dirs(path: &Path, entries: &[(&str, &[u8])]) {
+        let file = File::create(path).unwrap();
+        let mut writer = ZipWriter::new(file);
+        let options = FileOptions::default().compression_method(CompressionMethod::Stored);
+        for (name, data) in entries {
+            if name.ends_with('/') {
+                writer.add_directory(*name, options).unwrap();
+            } else {
+                writer.start_file(*name, options).unwrap();
+                writer.write_all(data).unwrap();
+            }
+        }
+        writer.finish().unwrap();
+    }
+
+    /// Run the plugin directly and open the converted ZIP
+    fn convert(source: &Path, out_dir: &Path) -> (CompressionResult, ZipArchive<File>) {
+        let result = ImageZipToWebpZipPlugin::new()
+            .process(source, out_dir)
+            .unwrap();
+        let archive = ZipArchive::new(File::open(&result.output_path).unwrap()).unwrap();
+        (result, archive)
+    }
+
+    fn entry_names(archive: &mut ZipArchive<File>) -> Vec<String> {
+        (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect()
+    }
+
+    fn entry_bytes(archive: &mut ZipArchive<File>, name: &str) -> Vec<u8> {
+        let mut data = Vec::new();
+        archive
+            .by_name(name)
+            .unwrap()
+            .read_to_end(&mut data)
+            .unwrap();
+        data
+    }
+
+    fn is_webp_data(data: &[u8]) -> bool {
+        data.len() > 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WEBP"
+    }
+
+    #[test]
+    fn test_is_incidental_file() {
+        assert!(ImageZipToWebpZipPlugin::is_incidental_file(
+            "__MACOSX/._a.png"
+        ));
+        assert!(ImageZipToWebpZipPlugin::is_incidental_file(
+            "ch01/__MACOSX/._a.png"
+        ));
+        assert!(ImageZipToWebpZipPlugin::is_incidental_file("ComicInfo.xml"));
+        assert!(ImageZipToWebpZipPlugin::is_incidental_file(
+            "ch01/Thumbs.db"
+        ));
+        assert!(ImageZipToWebpZipPlugin::is_incidental_file(".DS_Store"));
+        assert!(ImageZipToWebpZipPlugin::is_incidental_file("desktop.ini"));
+        assert!(!ImageZipToWebpZipPlugin::is_incidental_file("readme.txt"));
+        assert!(!ImageZipToWebpZipPlugin::is_incidental_file("a.png"));
+        // Only the exact file name counts, not a suffix of it
+        assert!(!ImageZipToWebpZipPlugin::is_incidental_file("myThumbs.db"));
+    }
+
+    #[test]
+    fn test_decode_entry_name() {
+        let utf8 = "第一话/01.png";
+        assert_eq!(
+            ImageZipToWebpZipPlugin::decode_entry_name(utf8.as_bytes(), "mangled"),
+            utf8
+        );
+
+        let (gbk, _, _) = encoding_rs::GBK.encode(utf8);
+        assert_eq!(
+            ImageZipToWebpZipPlugin::decode_entry_name(&gbk, "mangled"),
+            utf8
+        );
+
+        // Neither UTF-8 nor GBK: keep the reader's (CP437) decoding
+        assert_eq!(
+            ImageZipToWebpZipPlugin::decode_entry_name(&[0xFF, 0xFF], "cp437"),
+            "cp437"
+        );
+
+        assert_eq!(ImageZipToWebpZipPlugin::decode_entry_name(b"", ""), "");
+    }
+
+    #[test]
+    fn test_webp_name_for() {
+        let taken = |names: &[&str]| -> HashSet<String> {
+            names.iter().map(|n| n.to_lowercase()).collect()
+        };
+
+        assert_eq!(
+            ImageZipToWebpZipPlugin::webp_name_for("ch01/a.png", &taken(&["ch01/a.png"])),
+            Some("ch01/a.webp".to_string())
+        );
+        // a.webp already exists: fall back to keeping the old extension
+        assert_eq!(
+            ImageZipToWebpZipPlugin::webp_name_for("a.jpg", &taken(&["a.jpg", "a.webp"])),
+            Some("a.jpg.webp".to_string())
+        );
+        // Collisions are case-insensitive
+        assert_eq!(
+            ImageZipToWebpZipPlugin::webp_name_for("a.PNG", &taken(&["A.WEBP"])),
+            Some("a.PNG.webp".to_string())
+        );
+        // Both candidates taken: no name, the image is kept as is
+        assert_eq!(
+            ImageZipToWebpZipPlugin::webp_name_for("a.png", &taken(&["a.webp", "a.png.webp"])),
+            None
+        );
+    }
+
+    #[test]
+    fn test_can_handle_ignores_directory_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = ImageZipToWebpZipPlugin::new();
+        let png = noise_png_bytes(32, 32);
+
+        let zip = dir.path().join("chapters.zip");
+        build_zip_with_dirs(
+            &zip,
+            &[
+                ("ch01/", b""),
+                ("ch01/a.png", &png),
+                ("ch01/sub/", b""),
+                ("ch01/sub/b.png", &png),
+            ],
+        );
+        let (can_handle, reason) = plugin.can_handle(&zip).unwrap();
+        assert!(can_handle, "reason: {:?}", reason);
+
+        // A ZIP of nothing but directories has no images
+        let dirs_only = dir.path().join("dirs.zip");
+        build_zip_with_dirs(&dirs_only, &[("ch01/", b""), ("ch02/", b"")]);
+        let (can_handle, _) = plugin.can_handle(&dirs_only).unwrap();
+        assert!(!can_handle);
+    }
+
+    #[test]
+    fn test_can_handle_ignores_incidental_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = ImageZipToWebpZipPlugin::new();
+        let png = noise_png_bytes(32, 32);
+
+        let zip = dir.path().join("comic.zip");
+        build_zip(
+            &zip,
+            &[
+                ("a.png", &png),
+                ("ComicInfo.xml", b"<ComicInfo/>"),
+                ("Thumbs.db", b"thumbs"),
+                ("__MACOSX/._a.png", b"resource fork"),
+            ],
+        );
+        let (can_handle, reason) = plugin.can_handle(&zip).unwrap();
+        assert!(can_handle, "reason: {:?}", reason);
+
+        // Only clutter, no images
+        let clutter = dir.path().join("clutter.zip");
+        build_zip(&clutter, &[("Thumbs.db", b"thumbs"), (".DS_Store", b"x")]);
+        let (can_handle, _) = plugin.can_handle(&clutter).unwrap();
+        assert!(!can_handle);
+    }
+
+    #[test]
+    fn test_can_handle_counts_webp_and_gif_as_images() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = ImageZipToWebpZipPlugin::new();
+        let png = noise_png_bytes(32, 32);
+
+        // Partly converted archive: still all images, one left to convert
+        let partial = dir.path().join("partial.zip");
+        build_zip(
+            &partial,
+            &[("a.webp", b"webp"), ("b.gif", b"gif"), ("c.png", &png)],
+        );
+        let (can_handle, _) = plugin.can_handle(&partial).unwrap();
+        assert!(can_handle);
+
+        // Nothing left to convert
+        let done = dir.path().join("done.zip");
+        build_zip(&done, &[("a.webp", b"webp"), ("b.gif", b"gif")]);
+        let (can_handle, _) = plugin.can_handle(&done).unwrap();
+        assert!(!can_handle);
+
+        // Empty archive
+        let empty = dir.path().join("empty.zip");
+        build_zip(&empty, &[]);
+        let (can_handle, _) = plugin.can_handle(&empty).unwrap();
+        assert!(!can_handle);
+    }
+
+    #[test]
+    fn test_process_resolves_name_collisions() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = noise_png_bytes(64, 64);
+        let source = dir.path().join("photos.zip");
+        // a.png and a.jpg both want a.webp; b.png must not shadow B.WEBP
+        build_zip(
+            &source,
+            &[
+                ("a.png", &png),
+                ("a.jpg", &png),
+                ("B.WEBP", b"existing webp"),
+                ("b.png", &png),
+            ],
+        );
+
+        let (result, mut archive) = convert(&source, &dir.path().join("out"));
+        assert_eq!(result.files_processed, 3);
+
+        let names = entry_names(&mut archive);
+        assert_eq!(names, vec!["a.webp", "a.jpg.webp", "B.WEBP", "b.png.webp"]);
+        assert!(is_webp_data(&entry_bytes(&mut archive, "a.webp")));
+        assert!(is_webp_data(&entry_bytes(&mut archive, "a.jpg.webp")));
+        assert!(is_webp_data(&entry_bytes(&mut archive, "b.png.webp")));
+        assert_eq!(entry_bytes(&mut archive, "B.WEBP"), b"existing webp");
+    }
+
+    #[test]
+    fn test_process_keeps_image_when_no_name_is_free() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = noise_png_bytes(64, 64);
+        let source = dir.path().join("photos.zip");
+        build_zip(
+            &source,
+            &[("a.png", &png), ("a.webp", b"one"), ("a.png.webp", b"two")],
+        );
+
+        let (result, mut archive) = convert(&source, &dir.path().join("out"));
+        assert_eq!(result.files_processed, 0);
+        assert_eq!(
+            entry_names(&mut archive),
+            vec!["a.png", "a.webp", "a.png.webp"]
+        );
+        assert_eq!(entry_bytes(&mut archive, "a.png"), png);
+    }
+
+    #[test]
+    fn test_process_keeps_image_whose_webp_is_not_smaller() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = noise_png_bytes(64, 64);
+        let jpeg = low_quality_noise_jpeg();
+        let source = dir.path().join("photos.zip");
+        build_zip(&source, &[("big.png", &png), ("small.jpg", &jpeg)]);
+
+        let (result, mut archive) = convert(&source, &dir.path().join("out"));
+        assert_eq!(result.files_processed, 1);
+        assert_eq!(entry_names(&mut archive), vec!["big.webp", "small.jpg"]);
+        assert_eq!(entry_bytes(&mut archive, "small.jpg"), jpeg);
+    }
+
+    #[test]
+    fn test_process_keeps_undecodable_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = noise_png_bytes(64, 64);
+        let source = dir.path().join("photos.zip");
+        build_zip(&source, &[("good.png", &png), ("broken.png", b"not a png")]);
+
+        let (result, mut archive) = convert(&source, &dir.path().join("out"));
+        assert_eq!(result.files_processed, 1);
+        assert_eq!(entry_names(&mut archive), vec!["good.webp", "broken.png"]);
+        assert_eq!(entry_bytes(&mut archive, "broken.png"), b"not a png");
+    }
+
+    #[test]
+    fn test_process_preserves_directories_and_entry_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = noise_png_bytes(64, 64);
+        let source = dir.path().join("chapters.zip");
+        let mtime = zip::DateTime::from_date_and_time(2020, 5, 17, 10, 30, 0).unwrap();
+        {
+            let mut writer = ZipWriter::new(File::create(&source).unwrap());
+            let stored = FileOptions::default()
+                .compression_method(CompressionMethod::Stored)
+                .last_modified_time(mtime);
+            let deflated = FileOptions::default()
+                .compression_method(CompressionMethod::Deflated)
+                .last_modified_time(mtime);
+            writer.add_directory("ch01/", stored).unwrap();
+            writer.start_file("ch01/a.png", stored).unwrap();
+            writer.write_all(&png).unwrap();
+            writer.start_file("ComicInfo.xml", deflated).unwrap();
+            writer.write_all(&b"<ComicInfo/>".repeat(50)).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let (_, mut archive) = convert(&source, &dir.path().join("out"));
+        assert_eq!(
+            entry_names(&mut archive),
+            vec!["ch01/", "ch01/a.webp", "ComicInfo.xml"]
+        );
+
+        assert!(archive.by_name("ch01/").unwrap().is_dir());
+
+        {
+            let webp = archive.by_name("ch01/a.webp").unwrap();
+            // Already-compressed WebP is stored, not deflated again
+            assert_eq!(webp.compression(), CompressionMethod::Stored);
+            assert_eq!(webp.last_modified().datepart(), mtime.datepart());
+            assert_eq!(webp.last_modified().timepart(), mtime.timepart());
+        }
+
+        {
+            // Other entries are copied with their compression and timestamp
+            let info = archive.by_name("ComicInfo.xml").unwrap();
+            assert_eq!(info.compression(), CompressionMethod::Deflated);
+            assert_eq!(info.last_modified().datepart(), mtime.datepart());
+            assert_eq!(info.last_modified().timepart(), mtime.timepart());
+        }
+        assert_eq!(
+            entry_bytes(&mut archive, "ComicInfo.xml"),
+            b"<ComicInfo/>".repeat(50)
+        );
+    }
+
+    /// Build a ZIP whose entry names are stored as `raw_prefix` bytes without
+    /// the UTF-8 flag, as legacy Windows archivers do. zip 0.6 always writes
+    /// UTF-8 names, so the archive is written with an ASCII placeholder of
+    /// the same length (flag unset) and the bytes are patched afterwards.
+    fn build_zip_with_raw_names(path: &Path, raw_prefix: &[u8], png: &[u8]) {
+        let placeholder = "X".repeat(raw_prefix.len());
+        build_zip_with_dirs(
+            path,
+            &[
+                (&format!("{}/", placeholder), b""),
+                (&format!("{}/01.png", placeholder), png),
+                (&format!("{}/readme.txt", placeholder), b"hi"),
+            ],
+        );
+        let mut bytes = fs::read(path).unwrap();
+        let needle = placeholder.as_bytes();
+        let mut i = 0;
+        let mut patched = 0;
+        while i + needle.len() <= bytes.len() {
+            if &bytes[i..i + needle.len()] == needle {
+                bytes[i..i + needle.len()].copy_from_slice(raw_prefix);
+                patched += 1;
+                i += needle.len();
+            } else {
+                i += 1;
+            }
+        }
+        // 3 entries, each named in the local header and the central directory
+        assert_eq!(patched, 6);
+        fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn test_process_decodes_legacy_entry_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = noise_png_bytes(64, 64);
+        let folder = "第一话";
+
+        let (gbk, _, _) = encoding_rs::GBK.encode(folder);
+        for (label, raw) in [("gbk", gbk.to_vec()), ("utf8", folder.as_bytes().to_vec())] {
+            let source = dir.path().join(format!("{}.zip", label));
+            build_zip_with_raw_names(&source, &raw, &png);
+
+            let (result, mut archive) = convert(&source, &dir.path().join(label));
+            assert_eq!(result.files_processed, 1, "{}", label);
+            assert_eq!(
+                entry_names(&mut archive),
+                vec![
+                    format!("{}/", folder),
+                    format!("{}/01.webp", folder),
+                    format!("{}/readme.txt", folder),
+                ],
+                "{}",
+                label
+            );
+            assert_eq!(
+                entry_bytes(&mut archive, &format!("{}/readme.txt", folder)),
+                b"hi"
+            );
         }
     }
 }
