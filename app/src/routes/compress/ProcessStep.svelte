@@ -248,6 +248,18 @@
                         Backup: {fileName(result.backup_path)}
                       </p>
                     {/if}
+                    {#if result.warnings?.length}
+                      <details class="mt-1 text-xs text-amber-700">
+                        <summary class="cursor-pointer">
+                          Partial: {result.warnings.length} item{result.warnings.length === 1 ? '' : 's'} kept unconverted
+                        </summary>
+                        <ul class="mt-1 ml-4 list-disc space-y-0.5">
+                          {#each result.warnings as warning}
+                            <li class="break-all">{warning}</li>
+                          {/each}
+                        </ul>
+                      </details>
+                    {/if}
                   </td>
                   <td class="px-3 py-2 text-right whitespace-nowrap align-top">
                     <p class="font-semibold text-green-700">{formatSize(result.savings || 0)}</p>

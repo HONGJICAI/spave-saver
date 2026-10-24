@@ -7,8 +7,8 @@ import type { CompressionPlugin } from '$lib/api';
 export const mockPlugins: CompressionPlugin[] = [
   {
     name: 'Image ZIP to WebP ZIP',
-    description: 'Converts images inside ZIP archives to WebP format',
-    version: '1.0.0',
+    description: 'Converts images inside ZIP/CBZ archives to WebP format',
+    version: '1.1.0',
     quality: 85,
   },
   {

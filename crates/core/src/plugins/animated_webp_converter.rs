@@ -141,6 +141,7 @@ impl CompressionPlugin for AnimatedWebPConverterPlugin {
                     files_processed: 1,
                     backup_path: None,
                     replace_source: false,
+                    warnings: Vec::new(),
                 })
             }
             Err(e) => {

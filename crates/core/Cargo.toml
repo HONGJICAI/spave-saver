@@ -19,6 +19,7 @@ image = { workspace = true }
 imagesize = "0.13"
 base64 = "0.22"
 webp = { workspace = true }
+kamadak-exif = { workspace = true }
 rayon = { workspace = true }
 crossbeam = { workspace = true }
 zip = { workspace = true }
